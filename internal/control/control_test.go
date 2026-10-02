@@ -92,7 +92,12 @@ func TestAutoModeRequiresHealthySignalsAndStopsOnVideoLoss(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	if motor.last() != "stop" {
-		t.Fatalf("last command = %q", motor.last())
+	for motor.last() != "stop" {
+		select {
+		case <-deadline:
+			t.Fatalf("last command = %q", motor.last())
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 }

@@ -2,15 +2,19 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/Parkwochang/cam-rover-hub/internal/control"
 	"github.com/Parkwochang/cam-rover-hub/internal/rover"
+	"github.com/Parkwochang/cam-rover-hub/internal/store"
+	"github.com/Parkwochang/cam-rover-hub/internal/vision"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -24,6 +28,7 @@ type API struct {
 	Rover     *rover.Client
 	Control   *control.Coordinator
 	AP        APConnector
+	Maps      *vision.Manager
 	nextOwner atomic.Uint64
 }
 
@@ -36,6 +41,12 @@ func (a *API) Register(router *gin.Engine) {
 	router.GET("/api/wifi/scan", a.scanStatus)
 	router.POST("/api/wifi/scan", a.scan)
 	router.POST("/api/link/ap", a.connectAP)
+	router.GET("/api/maps", a.listMaps)
+	router.POST("/api/maps", a.createMap)
+	router.GET("/api/maps/status", a.mapStatus)
+	router.GET("/api/maps/:id/poses", a.mapPoses)
+	router.POST("/api/maps/:id/load", a.loadMap)
+	router.POST("/api/maps/save", a.saveMap)
 }
 
 func (a *API) status(c *gin.Context) {
@@ -53,11 +64,134 @@ func (a *API) setMode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mode request"})
 		return
 	}
+	if input.Mode == "auto" && a.Maps != nil {
+		if !a.Control.IsOperator(input.OperatorID) {
+			c.JSON(http.StatusConflict, gin.H{"error": "active operator required"})
+			return
+		}
+		saved, err := store.LatestSavedMap(c.Request.Context(), a.Maps.DB())
+		if errors.Is(err, sql.ErrNoRows) {
+			if current := a.Maps.Status(); current.Running {
+				c.JSON(http.StatusAccepted, gin.H{"mode": "manual", "mapping": true, "map_id": current.MapID, "message": "지도 작업이 진행 중입니다."})
+				return
+			}
+			a.Control.Stop()
+			m, startErr := a.Maps.StartNew(c.Request.Context(), "자동 탐색 준비 지도")
+			if startErr != nil {
+				c.JSON(http.StatusConflict, gin.H{"error": startErr.Error()})
+				return
+			}
+			c.JSON(http.StatusAccepted, gin.H{"mode": "manual", "mapping": true, "map_id": m.ID, "message": "지도 작업을 시작했습니다. 감독하에 수동으로 천천히 이동하며 지도 저장 후 다시 시도하세요."})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "map lookup failed"})
+			return
+		}
+		if !a.Maps.Status().Running {
+			a.Control.Stop()
+			if err := a.Maps.Load(c.Request.Context(), saved.ID); err != nil {
+				c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusAccepted, gin.H{"mode": "manual", "relocalizing": true, "map_id": saved.ID, "message": "저장된 지도를 불러왔습니다. 위치 재인식 전에는 주행할 수 없습니다."})
+			return
+		}
+	}
 	if err := a.Control.SetMode(input.OperatorID, input.Mode); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, a.Control.Status())
+}
+
+func (a *API) listMaps(c *gin.Context) {
+	maps, err := store.ListMaps(c.Request.Context(), a.Maps.DB())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "maps unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"maps": maps})
+}
+
+func (a *API) createMap(c *gin.Context) {
+	var input struct {
+		Name       string `json:"name"`
+		OperatorID uint64 `json:"operator_id"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256)
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid map request"})
+		return
+	}
+	if !a.Control.IsOperator(input.OperatorID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "active operator required"})
+		return
+	}
+	a.Control.Stop()
+	m, err := a.Maps.StartNew(c.Request.Context(), input.Name)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, m)
+}
+
+func (a *API) mapStatus(c *gin.Context) { c.JSON(http.StatusOK, a.Maps.Status()) }
+
+func (a *API) mapPoses(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid map id"})
+		return
+	}
+	poses, err := store.ListPoses(c.Request.Context(), a.Maps.DB(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "poses unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"poses": poses})
+}
+
+func (a *API) loadMap(c *gin.Context) {
+	var input struct {
+		OperatorID uint64 `json:"operator_id"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128)
+	if err := c.ShouldBindJSON(&input); err != nil || !a.Control.IsOperator(input.OperatorID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "active operator required"})
+		return
+	}
+	a.Control.Stop()
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid map id"})
+		return
+	}
+	if err := a.Maps.Load(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, a.Maps.Status())
+}
+
+func (a *API) saveMap(c *gin.Context) {
+	var input struct {
+		OperatorID uint64 `json:"operator_id"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128)
+	if err := c.ShouldBindJSON(&input); err != nil || !a.Control.IsOperator(input.OperatorID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "active operator required"})
+		return
+	}
+	a.Control.Stop()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	if err := a.Maps.StopAndSave(ctx); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"saved": true})
 }
 
 func (a *API) network(c *gin.Context) {

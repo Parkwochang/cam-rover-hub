@@ -153,6 +153,12 @@ func (c *Coordinator) Supervise(owner uint64) error {
 	return nil
 }
 
+func (c *Coordinator) IsOperator(owner uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return owner != 0 && c.owner == owner && time.Since(c.lastSupervisor) < 700*time.Millisecond
+}
+
 func (c *Coordinator) SetMode(owner uint64, mode string) error {
 	if mode != "manual" && mode != "auto" {
 		return errors.New("mode must be manual or auto")
