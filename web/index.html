@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cam Rover Hub</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #101722; color: #f4f7fb; }
+    main { max-width: 920px; margin: auto; padding: 20px; }
+    section { background: #1b2737; border-radius: 16px; padding: 18px; margin: 16px 0; }
+    button, input { font: inherit; }
+    button { padding: 10px 14px; border: 0; border-radius: 9px; background: #3972c3; color: white; }
+    #video { width: 100%; min-height: 220px; background: #080b10; object-fit: contain; }
+    #map { width: 100%; height: 260px; background: #0e1520; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Cam Rover Hub</h1>
+  <section><h2>영상</h2><img id="video" alt="로버 영상"></section>
+  <section><h2>주행</h2><p id="status">허브를 준비하고 있습니다.</p><div id="controls"></div></section>
+  <section><h2>집 Wi-Fi</h2><div id="network"></div></section>
+  <section><h2>미니맵</h2><canvas id="map"></canvas></section>
+</main>
+</body>
+</html>
