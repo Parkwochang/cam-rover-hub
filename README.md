@@ -2,6 +2,8 @@
 
 Raspberry Pi hub for the ESP32-CAM rover. The Gin server provides one mobile entry point for manual driving, rover Wi-Fi provisioning, and status. The service binds to loopback so it can be published privately with Tailscale Serve.
 
+See [Pi deployment and hardware acceptance](docs/deployment.md) before exposing or moving the rover. Production requires a specific Tailscale identity and the service refuses non-loopback binds. Automatic movement is off until physical tests pass.
+
 ## Requirements
 
 - Go 1.25 or newer
@@ -14,7 +16,7 @@ Raspberry Pi hub for the ESP32-CAM rover. The Gin server provides one mobile ent
 go run .
 ```
 
-The server listens on `127.0.0.1:8080` by default. Set `LISTEN_ADDR` to change it. `ROVER_ADDR` defaults to `cam-rover.local`; set it to the rover's home Wi-Fi IP if mDNS is unavailable. Set `ROVER_API_TOKEN` to the firmware token. The hub never stores the home Wi-Fi password in SQLite.
+The server listens on `127.0.0.1:8080` by default. `LISTEN_ADDR` may change the port but must retain `127.0.0.1`. `ROVER_ADDR` defaults to `cam-rover.local`; set it to the rover's home Wi-Fi IP if mDNS is unavailable. Set `ROVER_API_TOKEN` to the firmware token. The hub never stores the home Wi-Fi password in SQLite.
 
 ```sh
 curl http://localhost:8080/healthz

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/Parkwochang/cam-rover-hub/internal/control"
 	"github.com/Parkwochang/cam-rover-hub/internal/network"
 	"github.com/Parkwochang/cam-rover-hub/internal/rover"
+	"github.com/Parkwochang/cam-rover-hub/internal/security"
 	"github.com/Parkwochang/cam-rover-hub/internal/store"
 	"github.com/Parkwochang/cam-rover-hub/internal/video"
 	"github.com/Parkwochang/cam-rover-hub/internal/vision"
@@ -22,6 +24,12 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := security.ValidateBind(cfg.ListenAddr, cfg.RequireTailscale, cfg.AllowedLogin); err != nil {
+		log.Fatal(err)
+	}
+	if cfg.RequireTailscale && (cfg.AllowedLogin == "owner@example.com" || cfg.RoverToken == "" || strings.HasPrefix(cfg.RoverToken, "REPLACE_")) {
+		log.Fatal("set a real TAILSCALE_ALLOWED_LOGIN and ROVER_API_TOKEN before deployment")
+	}
 	db, err := store.Open(cfg.DBPath)
 	if err != nil {
 		log.Fatal(err)
@@ -50,11 +58,11 @@ func main() {
 
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
-	hubAPI.Register(router)
-
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	router.Use(security.RequireIdentity(cfg.RequireTailscale, cfg.AllowedLogin))
+	hubAPI.Register(router)
 	router.GET("/", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})

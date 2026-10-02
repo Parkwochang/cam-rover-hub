@@ -4,3 +4,7 @@ cam-rover-hub
 data/
 *.db-wal
 *.db-shm
+/vision/build/
+/vision/__pycache__/
+/config/
+*.msg

@@ -1,0 +1,32 @@
+[Unit]
+Description=Cam Rover Go hub
+Wants=network-online.target
+After=network-online.target NetworkManager.service tailscaled.service
+
+[Service]
+Type=simple
+User=camrover
+Group=camrover
+WorkingDirectory=/opt/cam-rover-hub
+Environment=GIN_MODE=release
+EnvironmentFile=/etc/cam-rover-hub.env
+ExecStart=/opt/cam-rover-hub/cam-rover-hub
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+StateDirectory=cam-rover-hub
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
