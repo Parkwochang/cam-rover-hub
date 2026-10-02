@@ -6,4 +6,4 @@ The Pi uses Ethernet to reach the home router. Its Wi-Fi interface joins the rov
 
 Safety invariant: any missing operator heartbeat, rover connection, video stream, or visual tracking signal makes the coordinator send stop and prevents automatic restart.
 
-The vision process protocol and camera calibration workflow are in [mapping.md](mapping.md). The minimap is a relative trajectory, not a measured floor plan. In this branch the coordinator's automatic-motion guard remains deliberately false; the next branch must add risk assessment and pass hardware acceptance before enabling it.
+The vision process protocol and camera calibration workflow are in [mapping.md](mapping.md). The minimap is a relative trajectory, not a measured floor plan. Automatic movement is gated by an explicit deployment flag, saved-map relocalization, fresh visual risk output, live video and operator supervision. The runner can only request short pulses through the control coordinator; it cannot issue motor HTTP calls. Pi and rover acceptance remains mandatory before enabling the flag.

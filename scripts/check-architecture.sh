@@ -16,3 +16,8 @@ if rg -n 'internal/(rover|control)|\.Move\(|/api/move' internal/vision vision --
   echo 'Vision code must not control motors directly.' >&2
   exit 1
 fi
+
+if rg -n 'internal/rover|\.Move\(|/api/move' internal/autonomy --glob '*.go' --glob '!**/*_test.go'; then
+  echo 'Autonomy must request motion through the coordinator only.' >&2
+  exit 1
+fi

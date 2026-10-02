@@ -191,7 +191,7 @@
       for (const item of list.maps) select.add(new Option(`${item.name} · ${item.status}`, String(item.id)));
       select.value = selected || (state.map_id ? String(state.map_id) : '');
       const mapID = state.map_id || Number(select.value);
-      mapStatus.textContent = state.error || (state.running ? `지도 #${mapID} · ${state.tracking ? '위치 추적 중' : '위치 추적 대기/실패 · 정지 필요'}` : '지도 작업 없음');
+      mapStatus.textContent = state.error || (state.running ? `지도 #${mapID} · ${state.tracking ? '위치 추적 중' : '위치 추적 대기/실패 · 정지 필요'} · 시각 위험 ${state.risk_fresh ? (state.risk_safe ? '낮음(보장 아님)' : '높음/불확실') : '평가 대기'}` : '지도 작업 없음');
       if (mapID) {
         const data = await jsonRequest(`/api/maps/${mapID}/poses`);
         shownMapID = mapID;

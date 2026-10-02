@@ -27,3 +27,14 @@ The C++ worker and SLAM dependencies cannot be built or profiled on this
 development Mac. Pi 5 acceptance requires checking camera calibration,
 resolution, CPU/latency, relocalization, clean map save/reload, and emergency
 stop on tracking/video/process failure. Until then, auto motion stays disabled.
+
+The experimental automatic runner additionally needs `AUTO_ENABLED=1` after
+acceptance. The worker uses central-image optical-flow expansion as a
+conservative stop cue, requiring at least 30 tracks and three low-expansion
+frames. A static nearby obstacle can still look safe: monocular optical flow
+does **not** prove clearance or estimate distance. The runner sends 150 ms
+forward pulses at the firmware's minimum allowed speed, stops, then requires a
+new safe visual assessment before the next pulse. Unknown risk, lost tracking,
+missing frames, operator heartbeat loss, or process exit disarms automatic mode.
+It does not steer around obstacles. Keep a human hand on the stop control and
+test with wheels raised before any slow trial in a clear enclosed area.

@@ -33,11 +33,17 @@ type Config struct {
 }
 
 type Status struct {
-	MapID    int64       `json:"map_id"`
-	Running  bool        `json:"running"`
-	Tracking bool        `json:"tracking"`
-	LastPose *store.Pose `json:"last_pose,omitempty"`
-	Error    string      `json:"error,omitempty"`
+	MapID         int64       `json:"map_id"`
+	Running       bool        `json:"running"`
+	Loaded        bool        `json:"loaded"`
+	Tracking      bool        `json:"tracking"`
+	LastPose      *store.Pose `json:"last_pose,omitempty"`
+	RiskSafe      bool        `json:"risk_safe"`
+	RiskFresh     bool        `json:"risk_fresh"`
+	RiskTracks    int         `json:"risk_tracks"`
+	RiskExpansion float64     `json:"risk_expansion"`
+	RiskSeq       uint64      `json:"risk_seq"`
+	Error         string      `json:"error,omitempty"`
 }
 
 type Manager struct {
@@ -48,6 +54,7 @@ type Manager struct {
 	job          *job
 	status       Status
 	lastPoseTime time.Time
+	lastRiskTime time.Time
 }
 
 type job struct {
@@ -70,6 +77,9 @@ type workerMessage struct {
 	Y          float64 `json:"y"`
 	Heading    float64 `json:"heading"`
 	Confidence float64 `json:"confidence"`
+	Safe       bool    `json:"safe"`
+	Tracks     int     `json:"tracks"`
+	Expansion  float64 `json:"expansion"`
 }
 
 func New(db *sql.DB, frames Frames, cfg Config) *Manager {
@@ -85,11 +95,20 @@ func (m *Manager) Status() Status {
 	if s.Tracking && m.job != nil && time.Since(m.lastPoseTime) > time.Second {
 		s.Tracking = false
 	}
+	s.RiskFresh = m.job != nil && !m.lastRiskTime.IsZero() && time.Since(m.lastRiskTime) < time.Second
+	if !s.RiskFresh {
+		s.RiskSafe = false
+	}
 	return s
 }
 
 // lastPoseTime is intentionally independent from the persisted pose timestamp.
 func (m *Manager) Ready() bool { return m.Status().Tracking }
+
+func (m *Manager) ReadyForAuto() bool {
+	s := m.Status()
+	return s.Loaded && s.Running && s.Tracking && s.RiskFresh && s.RiskSafe
+}
 
 func (m *Manager) StartNew(ctx context.Context, name string) (store.Map, error) {
 	if name == "" {
@@ -171,8 +190,9 @@ func (m *Manager) start(id int64, path string, loaded bool) error {
 	}
 	j := &job{id: id, path: path, loaded: loaded, cmd: cmd, stdin: stdin, stop: make(chan struct{}), done: make(chan struct{}), parsed: make(chan struct{})}
 	m.job = j
-	m.status = Status{MapID: id, Running: true}
+	m.status = Status{MapID: id, Running: true, Loaded: loaded}
 	m.lastPoseTime = time.Time{}
+	m.lastRiskTime = time.Time{}
 	go m.consume(j, stdout)
 	go m.feed(j)
 	go m.wait(j)
@@ -206,6 +226,15 @@ func (m *Manager) consume(j *job, stdout io.Reader) {
 				}
 			case "lost":
 				m.status.Tracking = false
+				m.status.RiskSafe = false
+			case "risk":
+				if isFinite(event.Expansion) && event.Expansion >= 0 && event.Tracks >= 0 && event.Tracks <= 1000 {
+					m.status.RiskSafe = event.Safe && event.Tracks >= 30 && event.Expansion < 0.015
+					m.status.RiskTracks = event.Tracks
+					m.status.RiskExpansion = event.Expansion
+					m.status.RiskSeq++
+					m.lastRiskTime = time.Now()
+				}
 			}
 		}
 		m.mu.Unlock()

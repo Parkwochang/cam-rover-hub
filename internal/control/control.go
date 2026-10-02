@@ -242,6 +242,15 @@ func (c *Coordinator) AutoDrive(direction string) error {
 	return nil
 }
 
+func (c *Coordinator) FailAuto(reason string) {
+	c.mu.Lock()
+	active := c.mode == "auto"
+	c.mu.Unlock()
+	if active {
+		c.fail(reason)
+	}
+}
+
 func (c *Coordinator) Status() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()

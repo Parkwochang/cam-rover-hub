@@ -25,11 +25,12 @@ type APConnector interface {
 }
 
 type API struct {
-	Rover     *rover.Client
-	Control   *control.Coordinator
-	AP        APConnector
-	Maps      *vision.Manager
-	nextOwner atomic.Uint64
+	Rover       *rover.Client
+	Control     *control.Coordinator
+	AP          APConnector
+	Maps        *vision.Manager
+	AutoEnabled bool
+	nextOwner   atomic.Uint64
 }
 
 func (a *API) Register(router *gin.Engine) {
@@ -51,7 +52,7 @@ func (a *API) Register(router *gin.Engine) {
 
 func (a *API) status(c *gin.Context) {
 	status := a.Control.Status()
-	c.JSON(http.StatusOK, gin.H{"mode": status.Mode, "direction": status.Direction, "occupied": status.Occupied, "fault": status.Fault, "rover": a.Rover.Address()})
+	c.JSON(http.StatusOK, gin.H{"mode": status.Mode, "direction": status.Direction, "occupied": status.Occupied, "fault": status.Fault, "rover": a.Rover.Address(), "auto_enabled": a.AutoEnabled})
 }
 
 func (a *API) setMode(c *gin.Context) {
@@ -95,6 +96,14 @@ func (a *API) setMode(c *gin.Context) {
 				return
 			}
 			c.JSON(http.StatusAccepted, gin.H{"mode": "manual", "relocalizing": true, "map_id": saved.ID, "message": "저장된 지도를 불러왔습니다. 위치 재인식 전에는 주행할 수 없습니다."})
+			return
+		}
+		if !a.AutoEnabled {
+			c.JSON(http.StatusConflict, gin.H{"error": "automatic motion is disabled until Pi/rover acceptance checks pass"})
+			return
+		}
+		if !a.Maps.ReadyForAuto() {
+			c.JSON(http.StatusConflict, gin.H{"error": "map relocalization or visual clearance is unavailable; rover remains stopped"})
 			return
 		}
 	}

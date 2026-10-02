@@ -57,6 +57,23 @@ func TestInvalidPoseRejected(t *testing.T) {
 	}
 }
 
+func TestAutoReadinessFailsClosed(t *testing.T) {
+	now := time.Now()
+	m := &Manager{job: &job{}, status: Status{Loaded: true, Running: true, Tracking: true, RiskSafe: true}, lastPoseTime: now, lastRiskTime: now}
+	if !m.ReadyForAuto() {
+		t.Fatal("fresh loaded pose and risk rejected")
+	}
+	m.lastRiskTime = now.Add(-2 * time.Second)
+	if m.ReadyForAuto() {
+		t.Fatal("stale risk accepted")
+	}
+	m.lastRiskTime = now
+	m.status.Loaded = false
+	if m.ReadyForAuto() {
+		t.Fatal("new unsaved map accepted")
+	}
+}
+
 type fakeFrames struct{}
 
 func (fakeFrames) Snapshot() ([]byte, uint64, time.Time, <-chan struct{}) {
@@ -74,6 +91,7 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+printf '{"type":"risk","safe":true,"tracks":45,"expansion":0.001}\n'
 printf '{"type":"pose","x":1.5,"y":2.5,"heading":0.2,"confidence":1}\n'
 cat >/dev/null
 if [ -z "$loaded" ]; then printf 'map' > "$map"; fi
@@ -123,6 +141,9 @@ if [ -z "$loaded" ]; then printf 'map' > "$map"; fi
 	}
 	if !m.Ready() {
 		t.Fatal("saved map did not relocalize")
+	}
+	if !m.ReadyForAuto() {
+		t.Fatal("loaded map with pose and risk should be ready")
 	}
 	if err := m.StopAndSave(t.Context()); err != nil {
 		t.Fatal(err)

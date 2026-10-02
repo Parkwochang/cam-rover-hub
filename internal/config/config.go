@@ -13,6 +13,7 @@ type Config struct {
 	CameraConfig string
 	Vocabulary   string
 	MapDir       string
+	AutoEnabled  bool
 }
 
 func Load() Config {
@@ -27,6 +28,7 @@ func Load() Config {
 		CameraConfig: env("CAMERA_CONFIG", "config/camera.yaml"),
 		Vocabulary:   env("SLAM_VOCABULARY", "config/orb_vocab.fbow"),
 		MapDir:       env("MAP_DIR", "data/maps"),
+		AutoEnabled:  os.Getenv("AUTO_ENABLED") == "1",
 	}
 }
 

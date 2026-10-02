@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Parkwochang/cam-rover-hub/internal/api"
+	"github.com/Parkwochang/cam-rover-hub/internal/autonomy"
 	"github.com/Parkwochang/cam-rover-hub/internal/config"
 	"github.com/Parkwochang/cam-rover-hub/internal/control"
 	"github.com/Parkwochang/cam-rover-hub/internal/network"
@@ -33,14 +34,18 @@ func main() {
 	go broker.Run(streamCtx)
 	coordinator := control.New(roverClient)
 	defer coordinator.Close()
-	coordinator.SetGuards(broker.Healthy, func() bool { return false })
 	maps := vision.New(db, broker, vision.Config{Worker: cfg.VisionWorker, Camera: cfg.CameraConfig, Vocabulary: cfg.Vocabulary, MapDir: cfg.MapDir})
 	defer maps.Close()
+	coordinator.SetGuards(broker.Healthy, func() bool { return cfg.AutoEnabled && maps.ReadyForAuto() })
+	if cfg.AutoEnabled {
+		go autonomy.Run(streamCtx, coordinator, maps)
+	}
 	hubAPI := &api.API{
-		Rover:   roverClient,
-		Control: coordinator,
-		AP:      network.APConnector{Profile: cfg.APProfile, Interface: cfg.APInterface},
-		Maps:    maps,
+		Rover:       roverClient,
+		Control:     coordinator,
+		AP:          network.APConnector{Profile: cfg.APProfile, Interface: cfg.APInterface},
+		Maps:        maps,
+		AutoEnabled: cfg.AutoEnabled,
 	}
 
 	router := gin.New()
