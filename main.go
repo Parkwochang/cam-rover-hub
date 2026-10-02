@@ -4,15 +4,19 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Parkwochang/cam-rover-hub/internal/api"
+	"github.com/Parkwochang/cam-rover-hub/internal/autonomy"
 	"github.com/Parkwochang/cam-rover-hub/internal/config"
 	"github.com/Parkwochang/cam-rover-hub/internal/control"
 	"github.com/Parkwochang/cam-rover-hub/internal/network"
 	"github.com/Parkwochang/cam-rover-hub/internal/rover"
 	"github.com/Parkwochang/cam-rover-hub/internal/store"
 	"github.com/Parkwochang/cam-rover-hub/internal/video"
+	"github.com/Parkwochang/cam-rover-hub/internal/vision"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,11 +34,18 @@ func main() {
 	go broker.Run(streamCtx)
 	coordinator := control.New(roverClient)
 	defer coordinator.Close()
-	coordinator.SetGuards(broker.Healthy, func() bool { return false })
+	maps := vision.New(db, broker, vision.Config{Worker: cfg.VisionWorker, Camera: cfg.CameraConfig, Vocabulary: cfg.Vocabulary, MapDir: cfg.MapDir})
+	defer maps.Close()
+	coordinator.SetGuards(broker.Healthy, func() bool { return cfg.AutoEnabled && maps.ReadyForAuto() })
+	if cfg.AutoEnabled {
+		go autonomy.Run(streamCtx, coordinator, maps)
+	}
 	hubAPI := &api.API{
-		Rover:   roverClient,
-		Control: coordinator,
-		AP:      network.APConnector{Profile: cfg.APProfile, Interface: cfg.APInterface},
+		Rover:       roverClient,
+		Control:     coordinator,
+		AP:          network.APConnector{Profile: cfg.APProfile, Interface: cfg.APInterface},
+		Maps:        maps,
+		AutoEnabled: cfg.AutoEnabled,
 	}
 
 	router := gin.New()
@@ -56,5 +67,21 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	log.Printf("cam-rover-hub listening on %s", cfg.ListenAddr)
-	log.Fatal(server.ListenAndServe())
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.ListenAndServe() }()
+	shutdownCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	select {
+	case <-shutdownCtx.Done():
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("server stopped: %v", err)
+		}
+	}
+	coordinator.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("HTTP shutdown: %v", err)
+	}
 }

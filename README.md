@@ -31,5 +31,11 @@ Expected response: `{"status":"ok"}`.
 - `POST /api/link/ap`: connect the Pi's Wi-Fi interface to the preconfigured `cam-rover` NetworkManager profile, then use `192.168.71.1` for the rover.
 - `GET /video.mjpeg`: a bounded, same-origin MJPEG feed. The hub keeps one upstream connection to ESP32 port 81 and drops stale frames for slow viewers.
 - `POST /api/mode`: JSON `{ "mode":"manual"|"auto", "operator_id":N }`. The WebSocket sends the operator ID in a `hello` event. The browser renews a supervision heartbeat every 250 ms while visible and focused. Automatic mode stays unavailable until the vision and exploration worker report ready; a disconnected operator or video fault disarms it.
+- `GET /api/maps`, `GET /api/maps/status`, `GET /api/maps/:id/poses`: saved map metadata, active SLAM status and scale-free path.
+- `POST /api/maps` with `{ "name":"...", "operator_id":N }`: start a map job. `POST /api/maps/save` and `POST /api/maps/:id/load` use `{ "operator_id":N }` and stop motion before changing the job.
+
+See [mapping setup](docs/mapping.md) for camera calibration, the separate stella_vslam worker, and Pi-specific checks. Selecting automatic mode with no saved map starts a mapping job but **does not drive the rover**. Loading a saved map likewise waits for relocalization and later safety approval.
+
+`AUTO_ENABLED` defaults to off. Only set `AUTO_ENABLED=1` after the documented Pi/rover acceptance checks. The experimental runner makes short minimum-speed forward pulses and stops on visual uncertainty; it is not a certified collision-avoidance or obstacle-steering system.
 
 NetworkManager profile activation needs permission for the service account. Create the profile on the Pi before using the AP button. Do not place the AP password in the hub database or shell command arguments. Normal driving uses the rover's home Wi-Fi address; the AP path is for provisioning and recovery.

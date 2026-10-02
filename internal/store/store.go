@@ -43,6 +43,7 @@ func Open(path string) (*sql.DB, error) {
 			message TEXT NOT NULL,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`UPDATE maps SET status='failed' WHERE status='mapping'`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			db.Close()

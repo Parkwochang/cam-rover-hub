@@ -43,7 +43,14 @@
     <div class="row"><button id="useHome">집 Wi-Fi 접속·저장</button><button id="useAP">AP 모드로 전환</button></div>
     <p id="networkMessage" role="status"></p>
   </section>
-  <section><h2>미니맵</h2><canvas id="map"></canvas></section>
+  <section>
+    <h2>상대 경로 미니맵</h2>
+    <p>단안 카메라 추정 경로입니다. 축척·실제 거리·장애물 위치를 보장하지 않습니다.</p>
+    <div class="row"><input id="mapName" placeholder="지도 이름" maxlength="80"><button id="createMap">새 지도 기록</button><button id="saveMap">지도 저장</button></div>
+    <div class="row"><select id="mapList"><option value="">저장된 지도 선택</option></select><button id="loadMap">지도 불러오기</button></div>
+    <p id="mapStatus" role="status">지도 작업 없음</p>
+    <canvas id="map" aria-label="추정 경로와 현재 위치"></canvas>
+  </section>
 </main>
 <script>
   const status = document.getElementById('status');
@@ -61,7 +68,7 @@
     socket.onopen = () => { reconnectDelay = 500; status.textContent = '조작 연결됨'; };
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'hello') operatorID = msg.operator_id;
+      if (msg.type === 'hello') { operatorID = msg.operator_id; send({type:'supervise', active:true}); }
       if (msg.type === 'error') status.textContent = msg.message;
     };
     socket.onclose = () => { operatorID = 0; activeDirection = 'stop'; status.textContent = '연결 끊김 · 로버 정지'; setTimeout(connectSocket, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 5000); };
@@ -92,7 +99,8 @@
     try {
       const state = await jsonRequest('/api/mode', {method:'POST', body:JSON.stringify({mode, operator_id:operatorID})});
       document.getElementById('modeState').textContent = state.mode === 'auto' ? '자동 탐색 중' : '수동 모드';
-      status.textContent = state.fault || '모드가 전환됐습니다.';
+      status.textContent = state.message || state.fault || '모드가 전환됐습니다.';
+      refreshMaps();
     } catch (error) { status.textContent = error.message; }
   }
   document.getElementById('manualMode').addEventListener('click', () => changeMode('manual'));
@@ -147,6 +155,68 @@
   refreshNetwork();
   setInterval(refreshNetwork, 2000);
   setInterval(refreshScan, 1500);
+
+  const mapCanvas = document.getElementById('map');
+  const mapStatus = document.getElementById('mapStatus');
+  let shownMapID = 0;
+  function drawMap(poses, tracking) {
+    const ratio = devicePixelRatio || 1;
+    const width = mapCanvas.clientWidth;
+    const height = mapCanvas.clientHeight;
+    mapCanvas.width = Math.round(width * ratio);
+    mapCanvas.height = Math.round(height * ratio);
+    const ctx = mapCanvas.getContext('2d');
+    ctx.scale(ratio, ratio);
+    ctx.fillStyle = '#0e1520'; ctx.fillRect(0, 0, width, height);
+    if (!poses.length) { ctx.fillStyle = '#aebdd0'; ctx.fillText('추정 위치가 아직 없습니다', 16, 28); return; }
+    const xs = poses.map(p => p.x), ys = poses.map(p => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const span = Math.max(maxX - minX, maxY - minY, 0.01);
+    const scale = Math.min((width - 40) / span, (height - 40) / span);
+    const point = p => ({x:width / 2 + (p.x - (minX + maxX) / 2) * scale, y:height / 2 - (p.y - (minY + maxY) / 2) * scale});
+    ctx.beginPath();
+    poses.forEach((pose, i) => { const p = point(pose); if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); });
+    ctx.strokeStyle = '#6cc8ed'; ctx.lineWidth = 2; ctx.stroke();
+    const latest = poses[poses.length - 1], tip = point(latest);
+    ctx.save(); ctx.translate(tip.x, tip.y); ctx.rotate(-latest.heading);
+    ctx.fillStyle = tracking ? '#65df9b' : '#ff9a66';
+    ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(-7, 7); ctx.lineTo(7, 7); ctx.closePath(); ctx.fill(); ctx.restore();
+  }
+  async function refreshMaps() {
+    try {
+      const [list, state] = await Promise.all([jsonRequest('/api/maps'), jsonRequest('/api/maps/status')]);
+      const select = document.getElementById('mapList');
+      const selected = select.value;
+      select.replaceChildren(new Option('저장된 지도 선택', ''));
+      for (const item of list.maps) select.add(new Option(`${item.name} · ${item.status}`, String(item.id)));
+      select.value = selected || (state.map_id ? String(state.map_id) : '');
+      const mapID = state.map_id || Number(select.value);
+      mapStatus.textContent = state.error || (state.running ? `지도 #${mapID} · ${state.tracking ? '위치 추적 중' : '위치 추적 대기/실패 · 정지 필요'} · 시각 위험 ${state.risk_fresh ? (state.risk_safe ? '낮음(보장 아님)' : '높음/불확실') : '평가 대기'}` : '지도 작업 없음');
+      if (mapID) {
+        const data = await jsonRequest(`/api/maps/${mapID}/poses`);
+        shownMapID = mapID;
+        drawMap(data.poses, state.running && state.tracking);
+      } else if (shownMapID) { shownMapID = 0; drawMap([], false); }
+    } catch (error) { mapStatus.textContent = error.message; }
+  }
+  document.getElementById('createMap').addEventListener('click', async () => {
+    stop();
+    try { await jsonRequest('/api/maps', {method:'POST', body:JSON.stringify({name:document.getElementById('mapName').value, operator_id:operatorID})}); refreshMaps(); }
+    catch (error) { mapStatus.textContent = error.message; }
+  });
+  document.getElementById('saveMap').addEventListener('click', async () => {
+    stop();
+    try { await jsonRequest('/api/maps/save', {method:'POST', body:JSON.stringify({operator_id:operatorID})}); refreshMaps(); }
+    catch (error) { mapStatus.textContent = error.message; }
+  });
+  document.getElementById('loadMap').addEventListener('click', async () => {
+    stop();
+    const id = document.getElementById('mapList').value;
+    if (!id) return;
+    try { await jsonRequest(`/api/maps/${id}/load`, {method:'POST', body:JSON.stringify({operator_id:operatorID})}); refreshMaps(); }
+    catch (error) { mapStatus.textContent = error.message; }
+  });
+  refreshMaps(); setInterval(refreshMaps, 2000);
 </script>
 </body>
 </html>
