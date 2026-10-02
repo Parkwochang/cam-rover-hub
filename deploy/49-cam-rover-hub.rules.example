@@ -1,0 +1,9 @@
+// Optional: install only after checking that the service account cannot
+// activate the pre-created cam-rover NetworkManager profile. This grants
+// connection activation, not permission to edit arbitrary system profiles.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.NetworkManager.network-control" &&
+        subject.user == "camrover") {
+        return polkit.Result.YES;
+    }
+});

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -16,9 +15,9 @@ type APConnector struct {
 func (a APConnector) run(args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "nmcli", args...).CombinedOutput()
+	err := exec.CommandContext(ctx, "nmcli", args...).Run()
 	if err != nil {
-		return fmt.Errorf("NetworkManager: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("NetworkManager operation failed: %w", err)
 	}
 	return nil
 }
