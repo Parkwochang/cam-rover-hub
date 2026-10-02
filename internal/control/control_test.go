@@ -1,0 +1,60 @@
+package control
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+)
+
+type fakeMotor struct {
+	mu         sync.Mutex
+	directions []string
+}
+
+func (f *fakeMotor) Move(_ context.Context, direction string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.directions = append(f.directions, direction)
+	return nil
+}
+func (f *fakeMotor) Speed(context.Context, int) error { return nil }
+func (f *fakeMotor) last() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.directions[len(f.directions)-1]
+}
+
+func TestOnlyOneOwnerAndDisconnectStops(t *testing.T) {
+	motor := &fakeMotor{}
+	c := New(motor)
+	defer c.Close()
+	if err := c.Drive(1, "forward"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Drive(2, "left"); err != ErrBusy {
+		t.Fatalf("competing owner: %v", err)
+	}
+	c.StopOwner(1)
+	if motor.last() != "stop" {
+		t.Fatalf("last command = %q", motor.last())
+	}
+}
+
+func TestHeartbeatExpiryStops(t *testing.T) {
+	motor := &fakeMotor{}
+	c := New(motor)
+	defer c.Close()
+	if err := c.Drive(1, "forward"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(900 * time.Millisecond)
+	for motor.last() != "stop" {
+		select {
+		case <-deadline:
+			t.Fatal("rover did not stop")
+		default:
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}

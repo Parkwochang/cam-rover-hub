@@ -9,8 +9,14 @@
     body { margin: 0; background: #101722; color: #f4f7fb; }
     main { max-width: 920px; margin: auto; padding: 20px; }
     section { background: #1b2737; border-radius: 16px; padding: 18px; margin: 16px 0; }
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
     button { padding: 10px 14px; border: 0; border-radius: 9px; background: #3972c3; color: white; }
+    button:disabled { opacity: .45; }
+    .pad { display: grid; grid-template-columns: repeat(3, 65px); gap: 8px; width: max-content; margin: 15px auto; touch-action: none; }
+    .pad button { height: 58px; font-size: 1.4rem; touch-action: none; }
+    .stop { background: #a33d49; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+    input:not([type=range]), select { padding: 9px; min-width: 180px; max-width: 100%; }
     #video { width: 100%; min-height: 220px; background: #080b10; object-fit: contain; }
     #map { width: 100%; height: 260px; background: #0e1520; }
   </style>
@@ -19,9 +25,103 @@
 <main>
   <h1>Cam Rover Hub</h1>
   <section><h2>영상</h2><img id="video" alt="로버 영상"></section>
-  <section><h2>주행</h2><p id="status">허브를 준비하고 있습니다.</p><div id="controls"></div></section>
-  <section><h2>집 Wi-Fi</h2><div id="network"></div></section>
+  <section>
+    <h2>주행</h2><p id="status">연결 중입니다.</p>
+    <div class="pad" aria-label="주행 버튼">
+      <button data-direction="forward-left">↖</button><button data-direction="forward">↑</button><button data-direction="forward-right">↗</button>
+      <button data-direction="left">←</button><button class="stop" data-direction="stop">■</button><button data-direction="right">→</button>
+      <button data-direction="backward-left">↙</button><button data-direction="backward">↓</button><button data-direction="backward-right">↘</button>
+    </div>
+    <div class="row"><label>속도 <input id="speed" type="range" min="85" max="255" value="170"></label><output id="speedValue">170</output><button id="light">라이트 켜기</button></div>
+    <small>버튼을 누르는 동안만 움직입니다. 연결이 끊기면 자동으로 멈춥니다.</small>
+  </section>
+  <section>
+    <h2>집 Wi-Fi</h2><p id="networkStatus">로버 상태를 확인 중입니다.</p>
+    <div class="row"><button id="connectAP">로버 AP 연결</button><button id="scanWiFi">주변 Wi-Fi 검색</button></div>
+    <div class="row"><select id="networkList"><option value="">검색 결과</option></select><input id="ssid" placeholder="2.4 GHz Wi-Fi 이름" autocomplete="off"><input id="password" type="password" placeholder="Wi-Fi 암호" autocomplete="off"></div>
+    <div class="row"><button id="useHome">집 Wi-Fi 접속·저장</button><button id="useAP">AP 모드로 전환</button></div>
+    <p id="networkMessage" role="status"></p>
+  </section>
   <section><h2>미니맵</h2><canvas id="map"></canvas></section>
 </main>
+<script>
+  const status = document.getElementById('status');
+  const networkStatus = document.getElementById('networkStatus');
+  const networkMessage = document.getElementById('networkMessage');
+  let socket;
+  let activeDirection = 'stop';
+  let reconnectDelay = 500;
+  const send = (message) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); };
+  const stop = () => { activeDirection = 'stop'; send({type:'stop'}); };
+  function connectSocket() {
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    socket = new WebSocket(`${scheme}//${location.host}/ws`);
+    socket.onopen = () => { reconnectDelay = 500; status.textContent = '수동 조작 연결됨'; };
+    socket.onmessage = (event) => { const msg = JSON.parse(event.data); if (msg.type === 'error') status.textContent = msg.message; };
+    socket.onclose = () => { activeDirection = 'stop'; status.textContent = '연결 끊김 · 로버 정지'; setTimeout(connectSocket, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 5000); };
+  }
+  connectSocket();
+  document.querySelectorAll('[data-direction]').forEach((button) => {
+    const direction = button.dataset.direction;
+    button.addEventListener('pointerdown', (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); activeDirection = direction; send({type:'drive', direction}); });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(name, stop);
+  });
+  setInterval(() => { if (activeDirection !== 'stop') send({type:'drive', direction:activeDirection}); }, 250);
+  addEventListener('blur', stop);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+  const speed = document.getElementById('speed');
+  speed.addEventListener('input', () => { document.getElementById('speedValue').value = speed.value; });
+  speed.addEventListener('change', () => send({type:'speed', speed:Number(speed.value)}));
+  let lightOn = false;
+  document.getElementById('light').addEventListener('click', () => { lightOn = !lightOn; send({type:'light', on:lightOn}); document.getElementById('light').textContent = lightOn ? '라이트 끄기' : '라이트 켜기'; });
+
+  async function jsonRequest(path, options) {
+    const response = await fetch(path, {...options, headers:{'Content-Type':'application/json', ...(options?.headers || {})}});
+    if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `HTTP ${response.status}`); }
+    return response.json();
+  }
+  async function refreshNetwork() {
+    try {
+      const data = await jsonRequest('/api/network');
+      networkStatus.textContent = `현재 ${data.mode === 'sta' ? '집 Wi-Fi' : '로버 AP'} · ${data.phase || '대기'} · ${data.ip || ''} · 저장된 SSID: ${data.saved_ssid || '없음'}`;
+      if (data.last_error) networkMessage.textContent = data.last_error;
+    } catch (error) { networkStatus.textContent = `로버에 연결할 수 없습니다: ${error.message}`; }
+  }
+  document.getElementById('connectAP').addEventListener('click', async () => {
+    stop();
+    try { await jsonRequest('/api/link/ap', {method:'POST'}); networkMessage.textContent = '로버 AP에 연결했습니다.'; refreshNetwork(); }
+    catch (error) { networkMessage.textContent = error.message; }
+  });
+  document.getElementById('scanWiFi').addEventListener('click', async () => {
+    stop();
+    try { await jsonRequest('/api/wifi/scan', {method:'POST'}); networkMessage.textContent = 'Wi-Fi 검색 중입니다.'; }
+    catch (error) { networkMessage.textContent = error.message; }
+  });
+  async function refreshScan() {
+    try {
+      const result = await jsonRequest('/api/wifi/scan');
+      if (result.phase !== 'ready') return;
+      const list = document.getElementById('networkList');
+      list.replaceChildren(new Option('검색 결과', ''));
+      for (const item of result.networks || []) list.add(new Option(`${item.ssid} (${item.rssi} dBm)`, item.ssid));
+    } catch (_) {}
+  }
+  document.getElementById('networkList').addEventListener('change', (event) => { if (event.target.value) document.getElementById('ssid').value = event.target.value; });
+  async function changeNetwork(mode) {
+    stop();
+    const ssid = document.getElementById('ssid').value;
+    const password = document.getElementById('password').value;
+    try {
+      await jsonRequest('/api/network', {method:'POST', body:JSON.stringify({mode, ...(mode === 'sta' && ssid && password ? {ssid, password} : {})})});
+      document.getElementById('password').value = '';
+      networkMessage.textContent = '전환을 시작했습니다. 연결 상태를 확인하세요.';
+    } catch (error) { networkMessage.textContent = error.message; }
+  }
+  document.getElementById('useHome').addEventListener('click', () => changeNetwork('sta'));
+  document.getElementById('useAP').addEventListener('click', () => changeNetwork('ap'));
+  refreshNetwork();
+  setInterval(refreshNetwork, 2000);
+  setInterval(refreshScan, 1500);
+</script>
 </body>
 </html>

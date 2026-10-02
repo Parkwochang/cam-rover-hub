@@ -8,6 +8,7 @@ type Config struct {
 	RoverToken  string
 	DBPath      string
 	APInterface string
+	APProfile   string
 }
 
 func Load() Config {
@@ -17,6 +18,7 @@ func Load() Config {
 		RoverToken:  os.Getenv("ROVER_API_TOKEN"),
 		DBPath:      env("DB_PATH", "data/rover.db"),
 		APInterface: env("AP_INTERFACE", "wlan0"),
+		APProfile:   env("AP_PROFILE", "cam-rover"),
 	}
 }
 
