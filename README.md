@@ -29,5 +29,6 @@ Expected response: `{"status":"ok"}`.
 - `POST /api/network`: JSON `{ "mode":"sta", "ssid":"...", "password":"..." }` or `{ "mode":"sta" }` for saved credentials; `{ "mode":"ap" }` switches to the rover AP.
 - `POST /api/wifi/scan`: start the firmware's Wi-Fi scan.
 - `POST /api/link/ap`: connect the Pi's Wi-Fi interface to the preconfigured `cam-rover` NetworkManager profile, then use `192.168.71.1` for the rover.
+- `GET /video.mjpeg`: a bounded, same-origin MJPEG feed. The hub keeps one upstream connection to ESP32 port 81 and drops stale frames for slow viewers.
 
 NetworkManager profile activation needs permission for the service account. Create the profile on the Pi before using the AP button. Do not place the AP password in the hub database or shell command arguments. Normal driving uses the rover's home Wi-Fi address; the AP path is for provisioning and recovery.
