@@ -1,3 +1,6 @@
 .DS_Store
 .env
 cam-rover-hub
+data/
+*.db-wal
+*.db-shm
