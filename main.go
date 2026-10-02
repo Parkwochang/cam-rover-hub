@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/Parkwochang/cam-rover-hub/internal/network"
 	"github.com/Parkwochang/cam-rover-hub/internal/rover"
 	"github.com/Parkwochang/cam-rover-hub/internal/store"
+	"github.com/Parkwochang/cam-rover-hub/internal/video"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,6 +24,10 @@ func main() {
 	}
 	defer db.Close()
 	roverClient := rover.New(cfg.RoverAddr, cfg.RoverToken)
+	streamCtx, stopStream := context.WithCancel(context.Background())
+	defer stopStream()
+	broker := video.New(roverClient)
+	go broker.Run(streamCtx)
 	coordinator := control.New(roverClient)
 	defer coordinator.Close()
 	hubAPI := &api.API{
@@ -40,6 +46,7 @@ func main() {
 	router.GET("/", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
+	router.GET("/video.mjpeg", gin.WrapH(broker))
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
