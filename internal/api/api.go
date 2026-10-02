@@ -30,6 +30,7 @@ type API struct {
 func (a *API) Register(router *gin.Engine) {
 	router.GET("/ws", a.websocket)
 	router.GET("/api/status", a.status)
+	router.POST("/api/mode", a.setMode)
 	router.GET("/api/network", a.network)
 	router.POST("/api/network", a.setNetwork)
 	router.GET("/api/wifi/scan", a.scanStatus)
@@ -38,8 +39,25 @@ func (a *API) Register(router *gin.Engine) {
 }
 
 func (a *API) status(c *gin.Context) {
-	mode, direction, occupied := a.Control.Status()
-	c.JSON(http.StatusOK, gin.H{"mode": mode, "direction": direction, "occupied": occupied, "rover": a.Rover.Address()})
+	status := a.Control.Status()
+	c.JSON(http.StatusOK, gin.H{"mode": status.Mode, "direction": status.Direction, "occupied": status.Occupied, "fault": status.Fault, "rover": a.Rover.Address()})
+}
+
+func (a *API) setMode(c *gin.Context) {
+	var input struct {
+		Mode       string `json:"mode"`
+		OperatorID uint64 `json:"operator_id"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128)
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mode request"})
+		return
+	}
+	if err := a.Control.SetMode(input.OperatorID, input.Mode); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, a.Control.Status())
 }
 
 func (a *API) network(c *gin.Context) {
@@ -162,12 +180,16 @@ func (a *API) websocket(c *gin.Context) {
 	owner := a.nextOwner.Add(1)
 	defer a.Control.StopOwner(owner)
 	conn.SetReadLimit(1024)
+	if err := conn.WriteJSON(gin.H{"type": "hello", "operator_id": owner}); err != nil {
+		return
+	}
 	for {
 		var message struct {
 			Type      string `json:"type"`
 			Direction string `json:"direction"`
 			Speed     int    `json:"speed"`
 			On        bool   `json:"on"`
+			Active    bool   `json:"active"`
 		}
 		if err := conn.ReadJSON(&message); err != nil {
 			return
@@ -182,6 +204,12 @@ func (a *API) websocket(c *gin.Context) {
 			commandErr = a.Rover.Light(c.Request.Context(), message.On)
 		case "stop":
 			a.Control.Stop()
+		case "supervise":
+			if message.Active {
+				commandErr = a.Control.Supervise(owner)
+			} else {
+				a.Control.StopOwner(owner)
+			}
 		default:
 			commandErr = errors.New("unknown command")
 		}

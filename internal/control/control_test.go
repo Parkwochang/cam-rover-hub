@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -56,5 +57,42 @@ func TestHeartbeatExpiryStops(t *testing.T) {
 		default:
 			time.Sleep(20 * time.Millisecond)
 		}
+	}
+}
+
+func TestAutoModeRequiresHealthySignalsAndStopsOnVideoLoss(t *testing.T) {
+	motor := &fakeMotor{}
+	c := New(motor)
+	defer c.Close()
+	var videoOK atomic.Bool
+	c.SetGuards(videoOK.Load, func() bool { return true })
+	if err := c.Supervise(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetMode(1, "auto"); err != ErrAutoUnavailable {
+		t.Fatalf("unhealthy video: %v", err)
+	}
+	videoOK.Store(true)
+	if err := c.Supervise(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetMode(1, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AutoDrive("forward"); err != nil {
+		t.Fatal(err)
+	}
+	videoOK.Store(false)
+	deadline := time.After(500 * time.Millisecond)
+	for c.Status().Mode != "manual" {
+		select {
+		case <-deadline:
+			t.Fatal("auto mode did not disarm")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if motor.last() != "stop" {
+		t.Fatalf("last command = %q", motor.last())
 	}
 }

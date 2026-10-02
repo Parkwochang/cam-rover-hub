@@ -27,6 +27,7 @@
   <section><h2>영상</h2><img id="video" src="/video.mjpeg" alt="로버 영상"></section>
   <section>
     <h2>주행</h2><p id="status">연결 중입니다.</p>
+    <div class="row"><button id="manualMode">수동 모드</button><button id="autoMode">자동 탐색</button><span id="modeState">수동 모드</span></div>
     <div class="pad" aria-label="주행 버튼">
       <button data-direction="forward-left">↖</button><button data-direction="forward">↑</button><button data-direction="forward-right">↗</button>
       <button data-direction="left">←</button><button class="stop" data-direction="stop">■</button><button data-direction="right">→</button>
@@ -49,6 +50,7 @@
   const networkStatus = document.getElementById('networkStatus');
   const networkMessage = document.getElementById('networkMessage');
   let socket;
+  let operatorID = 0;
   let activeDirection = 'stop';
   let reconnectDelay = 500;
   const send = (message) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); };
@@ -56,9 +58,13 @@
   function connectSocket() {
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
     socket = new WebSocket(`${scheme}//${location.host}/ws`);
-    socket.onopen = () => { reconnectDelay = 500; status.textContent = '수동 조작 연결됨'; };
-    socket.onmessage = (event) => { const msg = JSON.parse(event.data); if (msg.type === 'error') status.textContent = msg.message; };
-    socket.onclose = () => { activeDirection = 'stop'; status.textContent = '연결 끊김 · 로버 정지'; setTimeout(connectSocket, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 5000); };
+    socket.onopen = () => { reconnectDelay = 500; status.textContent = '조작 연결됨'; };
+    socket.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'hello') operatorID = msg.operator_id;
+      if (msg.type === 'error') status.textContent = msg.message;
+    };
+    socket.onclose = () => { operatorID = 0; activeDirection = 'stop'; status.textContent = '연결 끊김 · 로버 정지'; setTimeout(connectSocket, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 5000); };
   }
   connectSocket();
   document.querySelectorAll('[data-direction]').forEach((button) => {
@@ -67,8 +73,9 @@
     for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(name, stop);
   });
   setInterval(() => { if (activeDirection !== 'stop') send({type:'drive', direction:activeDirection}); }, 250);
-  addEventListener('blur', stop);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+  setInterval(() => { if (!document.hidden && document.hasFocus() && operatorID) send({type:'supervise', active:true}); }, 250);
+  addEventListener('blur', () => { stop(); send({type:'supervise', active:false}); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); send({type:'supervise', active:false}); } });
   const speed = document.getElementById('speed');
   speed.addEventListener('input', () => { document.getElementById('speedValue').value = speed.value; });
   speed.addEventListener('change', () => send({type:'speed', speed:Number(speed.value)}));
@@ -80,6 +87,24 @@
     if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `HTTP ${response.status}`); }
     return response.json();
   }
+  async function changeMode(mode) {
+    activeDirection = 'stop';
+    try {
+      const state = await jsonRequest('/api/mode', {method:'POST', body:JSON.stringify({mode, operator_id:operatorID})});
+      document.getElementById('modeState').textContent = state.mode === 'auto' ? '자동 탐색 중' : '수동 모드';
+      status.textContent = state.fault || '모드가 전환됐습니다.';
+    } catch (error) { status.textContent = error.message; }
+  }
+  document.getElementById('manualMode').addEventListener('click', () => changeMode('manual'));
+  document.getElementById('autoMode').addEventListener('click', () => changeMode('auto'));
+  async function refreshStatus() {
+    try {
+      const state = await jsonRequest('/api/status');
+      document.getElementById('modeState').textContent = state.mode === 'auto' ? '자동 탐색 중' : '수동 모드';
+      if (state.fault) status.textContent = state.fault;
+    } catch (_) {}
+  }
+  setInterval(refreshStatus, 1000);
   async function refreshNetwork() {
     try {
       const data = await jsonRequest('/api/network');
