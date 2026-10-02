@@ -30,6 +30,7 @@ func main() {
 	go broker.Run(streamCtx)
 	coordinator := control.New(roverClient)
 	defer coordinator.Close()
+	coordinator.SetGuards(broker.Healthy, func() bool { return false })
 	hubAPI := &api.API{
 		Rover:   roverClient,
 		Control: coordinator,
