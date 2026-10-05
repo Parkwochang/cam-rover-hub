@@ -74,6 +74,30 @@ func TestActivationAcceptsSameOwnerHeartbeatWithoutCancelling(t *testing.T) {
 	}
 }
 
+func TestHTTPResponseBudgetIsTwoSecondsAndBootIsManual(t *testing.T) {
+	if commandTimeout != 2*time.Second {
+		t.Fatalf("HTTP budget=%s", commandTimeout)
+	}
+	m := &activationMotor{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	c := New(m)
+	defer c.Close()
+	if status := c.Status(); status.Mode != "manual" || status.Direction != "stop" {
+		t.Fatalf("unsafe boot status=%+v", status)
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.ActivateManual(1, 85) }()
+	<-m.entered
+	// A stopped activation may wait longer than the previous 500 ms budget.
+	time.Sleep(800 * time.Millisecond)
+	close(m.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if c.Status().Direction != "stop" {
+		t.Fatal("slow response must not start movement")
+	}
+}
+
 func TestDisconnectDuringActivationNeverRearms(t *testing.T) {
 	m := &activationMotor{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	c := New(m)

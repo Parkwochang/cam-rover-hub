@@ -100,3 +100,18 @@ test("failed stop response does not recursively flood stop commands",()=>{
   assert.equal(c.sent.filter(x=>x.type==="stop").length,1);
   assert.equal(c.run("canDrive()"),false);
 });
+
+test("mode selector defaults to manual and keeps automatic safety gates",()=>{
+  const c=cockpit();
+  assert.equal(c.node("manualMode").textContent,"수동 모드");
+  assert.equal(c.node("modeState").textContent,"수동 모드");
+  assert.equal(c.node("autoMode").textContent,"자동 모드");
+  assert.equal(c.node("autoMode").disabled,true);
+  c.run("autoEnabled=true; updateControls()");
+  assert.equal(c.node("autoMode").disabled,false);
+  c.run("videoHealthy=false; updateControls()");
+  assert.equal(c.node("autoMode").disabled,true);
+  c.run('videoHealthy=true; controlState={mode:"auto"}; updateControls()');
+  assert.equal(c.node("modeState").textContent,"자동 모드");
+  assert.equal(c.run("canDrive()"),false);
+});

@@ -345,7 +345,6 @@ func (a *API) websocket(c *gin.Context) {
 		if err := conn.ReadJSON(&message); err != nil {
 			return
 		}
-		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		var commandErr error
 		switch message.Type {
 		case "activate":
@@ -367,6 +366,8 @@ func (a *API) websocket(c *gin.Context) {
 		default:
 			commandErr = errors.New("unknown command")
 		}
+		// Start the write budget after the bounded rover operation finishes.
+		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		if commandErr != nil {
 			if err := conn.WriteJSON(gin.H{"type": "error", "command": message.Type, "request_id": message.RequestID, "message": commandErr.Error()}); err != nil {
 				return

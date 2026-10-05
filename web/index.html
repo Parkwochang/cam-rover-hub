@@ -23,7 +23,7 @@
         <div class="connection glass" role="status">
           <span id="linkDot" class="dot"></span
           ><span id="status">허브 연결 중</span
-          ><span id="modeState" class="mode-badge">MANUAL</span>
+          ><span id="modeState" class="mode-badge">수동 모드</span>
         </div>
         <div class="top-actions">
           <button
@@ -55,8 +55,11 @@
       <div class="reticle" aria-hidden="true"></div>
       <aside class="drive-overlay glass" aria-label="주행 조작">
         <div class="overlay-heading">
-          <span>DRIVE</span
-          ><button id="manualMode" class="chip">수동 제어 활성화</button>
+          <span>DRIVE</span>
+          <div class="mode-switch" role="group" aria-label="주행 모드 선택">
+            <button id="manualMode" class="chip" aria-pressed="true" title="수동 모드 활성화">수동 모드</button>
+            <button id="autoMode" class="chip" aria-pressed="false" disabled>자동 모드</button>
+          </div>
         </div>
         <div class="pad" aria-label="누르는 동안만 주행">
           <button data-direction="forward-left" aria-label="좌측 전진">
@@ -245,10 +248,10 @@
             저장됩니다.
           </p>
           <hr />
-          <h3>자동 탐색</h3>
-          <button id="autoMode" disabled>자동 탐색 비활성화</button>
+          <h3>주행 모드</h3>
           <p class="warning">
-            실기 안전 검증 전 자동 주행은 사용할 수 없습니다.
+            기본값은 수동 모드입니다. 조작 패널에서 모드를 선택하세요.
+            자동 모드는 영상·저장 지도·위치 재인식·현장 감독 조건을 만족해야 주행합니다.
           </p>
         </section>
       </div>

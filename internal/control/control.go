@@ -17,7 +17,8 @@ var ErrDirection = errors.New("invalid direction")
 var ErrAutoUnavailable = errors.New("automatic driving is not ready")
 
 // Stay below the ESP32's independent 700 ms deadman. Never retry movement.
-const commandTimeout = 500 * time.Millisecond
+// HTTP response budget only; operator expiry and the rover deadman stay shorter.
+const commandTimeout = 2 * time.Second
 
 type Status struct {
 	Mode      string `json:"mode"`
