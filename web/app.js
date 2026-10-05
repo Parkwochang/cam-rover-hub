@@ -10,7 +10,7 @@ let socket,
   closing = false;
 let activeDirection = "stop",
   heldPointer = null,
-  controlState = {},
+  controlState = { mode: "manual" },
   videoHealthy = false,
   socketReady = false;
 let stoppedLatch = true,
@@ -23,6 +23,7 @@ let activationCancelled = false;
 let requestSequence = 0;
 let controlRevision = 0;
 let driveRequestID = 0;
+let autoEnabled = false;
 let pollGeneration = 0;
 let mapPoses = [],
   mapTracking = false,
@@ -89,20 +90,25 @@ function updateControls() {
   });
   $("manualMode").disabled =
     !socketReady || !videoHealthy || dialog.open || activating;
-  $("manualMode").textContent = stoppedLatch ? "수동 제어 활성화" : "수동 제어";
+  $("manualMode").textContent = "수동 모드";
+  $("manualMode").title = stoppedLatch ? "수동 모드 활성화" : "수동 모드";
+  $("manualMode").setAttribute("aria-pressed", String(controlState.mode === "manual"));
+  $("autoMode").textContent = "자동 모드";
+  $("autoMode").setAttribute("aria-pressed", String(controlState.mode === "auto"));
+  $("autoMode").disabled = !autoEnabled || !socketReady || !videoHealthy || dialog.open || activating;
   $("speed").disabled = !socketReady || stoppedLatch;
   $("light").disabled = !socketReady;
   $("linkDot").classList.toggle("online", socketReady && videoHealthy);
   cockpit.classList.toggle("video-offline", !videoHealthy);
   $("videoNotice").hidden = videoHealthy;
-  $("modeState").textContent = controlState.mode === "auto" ? "AUTO" : "MANUAL";
+  $("modeState").textContent = controlState.mode === "auto" ? "자동 모드" : "수동 모드";
   $("status").textContent = !socketReady
     ? "허브 연결 대기"
     : !videoHealthy
       ? "로봇 영상 연결 대기"
       : stoppedLatch
         ? "연결됨 · 수동 활성화 필요"
-        : "연결됨 · 수동 제어";
+        : controlState.mode === "auto" ? "연결됨 · 자동 모드" : "연결됨 · 수동 모드";
 }
 function ack(message) {
   return new Promise((resolve, reject) => {
@@ -118,7 +124,7 @@ function ack(message) {
     const timer = setTimeout(() => {
       acknowledgements.delete(requestID);
       reject(new Error("조작 응답 시간 초과"));
-    }, message.type === "activate" ? 3000 : 2000);
+    }, message.type === "activate" ? 5500 : 3000);
     acknowledgements.set(requestID, { timer, resolve, reject, command: message.type });
     send({ ...message, request_id: requestID });
   });
@@ -328,10 +334,7 @@ async function refreshStatus() {
     $("videoMessage").textContent = state.fault
       ? `안전 정지: ${state.fault}`
       : "로봇 전원·집 Wi-Fi·주소를 확인하세요. 연결 복구 후 수동 제어를 활성화하세요.";
-    $("autoMode").disabled = !state.auto_enabled || !socketReady;
-    $("autoMode").textContent = state.auto_enabled
-      ? "자동 탐색 시작"
-      : "자동 탐색 비활성화";
+    autoEnabled = state.auto_enabled === true;
   } catch (error) {
     videoHealthy = false;
     stoppedLatch = true;
@@ -367,6 +370,7 @@ $("manualMode").addEventListener("click", async () => {
   }
 });
 $("autoMode").addEventListener("click", async () => {
+  if ($("autoMode").disabled) return;
   if (!confirm("바퀴·배터리·정지 안전 검증과 현장 감독을 완료했나요?")) return;
   try {
     await superviseForAction();

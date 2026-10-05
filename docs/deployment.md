@@ -18,11 +18,19 @@ requires fresh video. Use the hub as the only camera upstream client.
 Manual activation uses one WebSocket `activate` command: confirm stop, apply the
 requested speed, then clear the stop latch. ACK/error replies echo `request_id`
 so delayed heartbeats cannot complete another request. Refresh the mobile page
-after upgrading. Controls have a 500 ms deadline, still below the ESP32's 700 ms
-deadman; movement is never automatically retried after failure. Successful mDNS
+after upgrading. Controls have a 2 second HTTP response deadline. This does not
+extend the 550 ms operator-input expiry or the ESP32's independent 700 ms
+deadman. A delayed reply may therefore still result in a safe stop; it never
+rearms expired input. Movement is never automatically retried after failure. Successful mDNS
 lookups are cached for two seconds and invalidated on a failed dial or address
 change. This reduces lookup overhead; it does not repair radio loss or power
 instability. A control/video fault still requires explicit manual activation.
+
+The drive panel has a `수동 모드 / 자동 모드` selector. Boot/restart and every
+safety stop default to manual; enabling `AUTO_ENABLED=1` only makes automatic
+mode available, never selects it. Video, saved-map relocalization, fresh visual
+clearance, controller lease and supervision guards still apply. Automatic mode
+is an experimental supervised feature, not obstacle-avoiding navigation.
 
 Normal Pi-to-rover traffic can use the same 2.4 GHz LAN. The separate recovery
 AP operation below requires Ethernet/another uplink: switching the Pi's only
