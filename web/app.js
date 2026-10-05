@@ -19,6 +19,10 @@ let stoppedLatch = true,
   toastTimer,
   videoRetry = 1000;
 let activating = false;
+let activationCancelled = false;
+let requestSequence = 0;
+let controlRevision = 0;
+let driveRequestID = 0;
 let pollGeneration = 0;
 let mapPoses = [],
   mapTracking = false,
@@ -49,15 +53,23 @@ function toast(message) {
   toastTimer = setTimeout(() => ($("toast").hidden = true), 4500);
 }
 const send = (message) => {
-  if (socket?.readyState === WebSocket.OPEN)
-    socket.send(JSON.stringify(message));
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  // Never queue old movement while a slow command is still awaiting its ACK.
+  if (message.type === "drive" && driveRequestID) return;
+  const requestID = message.request_id ?? ++requestSequence;
+  if (message.type === "drive") driveRequestID = requestID;
+  socket.send(JSON.stringify({ ...message, request_id: requestID }));
 };
-function stop() {
+function releaseDrive() {
   activeDirection = "stop";
   heldPointer = null;
   document
     .querySelectorAll(".held")
     .forEach((button) => button.classList.remove("held"));
+}
+function stop() {
+  if (activating) activationCancelled = true;
+  releaseDrive();
   send({ type: "stop" });
 }
 function canDrive() {
@@ -65,6 +77,7 @@ function canDrive() {
     socketReady &&
     videoHealthy &&
     !stoppedLatch &&
+    !activating &&
     controlState.mode === "manual" &&
     !dialog.open &&
     !document.hidden
@@ -97,16 +110,17 @@ function ack(message) {
       reject(new Error("허브 조작 연결을 확인하세요."));
       return;
     }
-    if (acknowledgements.has(message.type)) {
+    if ([...acknowledgements.values()].some((pending) => pending.command === message.type)) {
       reject(new Error("이전 명령을 처리 중입니다."));
       return;
     }
+    const requestID = ++requestSequence;
     const timer = setTimeout(() => {
-      acknowledgements.delete(message.type);
+      acknowledgements.delete(requestID);
       reject(new Error("조작 응답 시간 초과"));
-    }, 1500);
-    acknowledgements.set(message.type, { timer, resolve, reject });
-    send(message);
+    }, message.type === "activate" ? 3000 : 2000);
+    acknowledgements.set(requestID, { timer, resolve, reject, command: message.type });
+    send({ ...message, request_id: requestID });
   });
 }
 function rejectPending(message) {
@@ -117,7 +131,7 @@ function rejectPending(message) {
   acknowledgements.clear();
 }
 async function superviseForAction() {
-  stop();
+  releaseDrive();
   await ack({ type: "stop" });
   await ack({ type: "supervise", active: true });
 }
@@ -148,17 +162,22 @@ function connectSocket() {
       if (!document.hidden) send({ type: "supervise", active: true });
     }
     if (message.type === "ack") {
-      const pending = acknowledgements.get(message.command);
-      if (pending) {
-        acknowledgements.delete(message.command);
+      if (message.request_id === driveRequestID) driveRequestID = 0;
+      const pending = acknowledgements.get(message.request_id);
+      if (pending && pending.command === message.command) {
+        acknowledgements.delete(message.request_id);
         clearTimeout(pending.timer);
-        pending.resolve();
+        pending.resolve(message);
       }
     }
     if (message.type === "error") {
+      driveRequestID = 0;
       rejectPending(message.message);
       stoppedLatch = true;
-      stop();
+      if (message.command === "stop") {
+        activationCancelled = true;
+        releaseDrive();
+      } else stop();
       toast(message.message);
       updateControls();
     }
@@ -166,6 +185,7 @@ function connectSocket() {
   next.onclose = () => {
     if (socket !== next) return;
     socketReady = false;
+    driveRequestID = 0;
     operatorID = 0;
     stoppedLatch = true;
     rejectPending("허브 연결이 끊겼습니다. 다시 활성화하세요.");
@@ -282,13 +302,14 @@ video.addEventListener("load", () => {
   videoRetry = 1000;
 });
 async function refreshStatus() {
+  const revision = controlRevision;
   try {
     const [state, link] = await Promise.all([
       jsonRequest("/api/status"),
       jsonRequest("/api/link"),
     ]);
-    controlState = state;
-    if (state.fault) {
+    if (revision === controlRevision) controlState = state;
+    if (revision === controlRevision && state.fault) {
       stoppedLatch = true;
       if (activeDirection !== "stop") stop();
     }
@@ -322,21 +343,25 @@ async function refreshStatus() {
 $("manualMode").addEventListener("click", async () => {
   if (activating) return;
   activating = true;
+  activationCancelled = false;
+  controlRevision++;
   stoppedLatch = true;
   updateControls();
   try {
-    await superviseForAction();
-    controlState = await jsonRequest("/api/mode", {
-      method: "POST",
-      body: JSON.stringify({ mode: "manual", operator_id: operatorID }),
-    });
-    await ack({ type: "speed", speed: Number($("speed").value) });
+    releaseDrive();
+    const result = await ack({ type: "activate", speed: Number($("speed").value) });
+    if (activationCancelled || document.hidden || dialog.open || !socketReady)
+      throw new Error("활성화를 취소했습니다. 다시 수동 제어를 활성화하세요.");
+    controlState = result.status;
     stoppedLatch = false;
     toast("수동 제어 활성화 · 버튼을 누르는 동안만 주행");
     updateControls();
   } catch (error) {
+    stoppedLatch = true;
+    stop();
     toast(error.message);
   } finally {
+    controlRevision++;
     activating = false;
     updateControls();
   }

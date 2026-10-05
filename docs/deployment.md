@@ -15,6 +15,15 @@ Address changes invalidate the old video stream; a five-second no-frame watchdog
 reopens stalled streams. Recovery never resumes motion. Manual driving also
 requires fresh video. Use the hub as the only camera upstream client.
 
+Manual activation uses one WebSocket `activate` command: confirm stop, apply the
+requested speed, then clear the stop latch. ACK/error replies echo `request_id`
+so delayed heartbeats cannot complete another request. Refresh the mobile page
+after upgrading. Controls have a 500 ms deadline, still below the ESP32's 700 ms
+deadman; movement is never automatically retried after failure. Successful mDNS
+lookups are cached for two seconds and invalidated on a failed dial or address
+change. This reduces lookup overhead; it does not repair radio loss or power
+instability. A control/video fault still requires explicit manual activation.
+
 Normal Pi-to-rover traffic can use the same 2.4 GHz LAN. The separate recovery
 AP operation below requires Ethernet/another uplink: switching the Pi's only
 Wi-Fi interface to the rover AP will interrupt its Tailscale connection.

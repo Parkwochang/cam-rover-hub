@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -86,14 +87,61 @@ func resolveLocal(ctx context.Context, host string) (string, error) {
 	return "", errors.New("mDNS returned no private IPv4 address")
 }
 
-func dialRover(ctx context.Context, network, address string) (net.Conn, error) {
+type localResolver struct {
+	mu       sync.Mutex
+	host, ip string
+	expires  time.Time
+	revision uint64
+	lookup   func(context.Context, string) (string, error)
+}
+
+func (r *localResolver) invalidate() {
+	r.mu.Lock()
+	r.expires = time.Time{}
+	r.revision++
+	r.mu.Unlock()
+}
+
+func (r *localResolver) resolve(ctx context.Context, host string) (string, error) {
+	if !strings.HasSuffix(strings.ToLower(host), ".local") {
+		return host, nil
+	}
+	r.mu.Lock()
+	if r.host == host && time.Now().Before(r.expires) {
+		ip := r.ip
+		r.mu.Unlock()
+		return ip, nil
+	}
+	revision := r.revision
+	r.mu.Unlock()
+	lookup := r.lookup
+	if lookup == nil {
+		lookup = resolveLocal
+	}
+	ip, err := lookup(ctx, host)
+	if err != nil {
+		return "", err
+	}
+	r.mu.Lock()
+	if r.revision == revision {
+		r.host, r.ip, r.expires = host, ip, time.Now().Add(2*time.Second)
+	}
+	r.mu.Unlock()
+	return ip, nil
+}
+
+func (r *localResolver) dial(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
-	host, err = resolveLocal(ctx, host)
+	host, err = r.resolve(ctx, host)
 	if err != nil {
 		return nil, err
 	}
-	return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, network, net.JoinHostPort(host, port))
+	conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, network, net.JoinHostPort(host, port))
+	if err != nil {
+		r.invalidate()
+	}
+	return conn, err
 }
