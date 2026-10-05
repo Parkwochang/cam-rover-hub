@@ -30,6 +30,8 @@ type API struct {
 	AP          APConnector
 	Maps        *vision.Manager
 	AutoEnabled bool
+	Video       VideoLink
+	SettingsDB  *sql.DB
 	nextOwner   atomic.Uint64
 }
 
@@ -42,6 +44,9 @@ func (a *API) Register(router *gin.Engine) {
 	router.GET("/api/wifi/scan", a.scanStatus)
 	router.POST("/api/wifi/scan", a.scan)
 	router.POST("/api/link/ap", a.connectAP)
+	router.GET("/api/link", a.link)
+	router.PUT("/api/link", a.setLink)
+	router.POST("/api/link/reconnect", a.reconnect)
 	router.GET("/api/maps", a.listMaps)
 	router.POST("/api/maps", a.createMap)
 	router.GET("/api/maps/status", a.mapStatus)
@@ -323,10 +328,12 @@ func (a *API) websocket(c *gin.Context) {
 	owner := a.nextOwner.Add(1)
 	defer a.Control.StopOwner(owner)
 	conn.SetReadLimit(1024)
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	if err := conn.WriteJSON(gin.H{"type": "hello", "operator_id": owner}); err != nil {
 		return
 	}
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		var message struct {
 			Type      string `json:"type"`
 			Direction string `json:"direction"`
@@ -337,6 +344,7 @@ func (a *API) websocket(c *gin.Context) {
 		if err := conn.ReadJSON(&message); err != nil {
 			return
 		}
+		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		var commandErr error
 		switch message.Type {
 		case "drive":

@@ -1,5 +1,24 @@
 # Raspberry Pi 5 deployment and acceptance
 
+## Address and video recovery
+
+Use `ROVER_ADDR=cam-rover.local` or reserve the rover's IPv4 address in the router.
+Static Go builds cannot directly use Linux NSS mDNS; the hub resolves `.local`
+through bounded `getent ahostsv4` calls. Install/enable `avahi-daemon` and
+`libnss-mdns` if `getent ahostsv4 cam-rover.local` does not resolve on the Pi.
+
+Authenticated settings routes are `GET/PUT /api/link` and
+`POST /api/link/reconnect`. Only private IPv4 or `.local` targets are accepted.
+The target is stored in SQLite (not credentials) and overrides `ROVER_ADDR` on
+restart. Saving works even when the robot is off, and keeps motion stopped.
+Address changes invalidate the old video stream; a five-second no-frame watchdog
+reopens stalled streams. Recovery never resumes motion. Manual driving also
+requires fresh video. Use the hub as the only camera upstream client.
+
+Normal Pi-to-rover traffic can use the same 2.4 GHz LAN. The separate recovery
+AP operation below requires Ethernet/another uplink: switching the Pi's only
+Wi-Fi interface to the rover AP will interrupt its Tailscale connection.
+
 This service assumes Ethernet from Pi to the home router; `wlan0` is reserved
 for one-time rover AP setup/recovery. Normal Pi-to-rover traffic uses the
 ESP32's home Wi-Fi address. Do not expose the ESP32 or Go port with router
