@@ -60,6 +60,64 @@ func TestHeartbeatExpiryStops(t *testing.T) {
 	}
 }
 
+func TestManualDriveRequiresVideoAndStopsWhenVideoLost(t *testing.T) {
+	motor := &fakeMotor{}
+	c := New(motor)
+	defer c.Close()
+	var healthy atomic.Bool
+	c.SetGuards(healthy.Load, func() bool { return false })
+	if err := c.Drive(1, "forward"); err == nil {
+		t.Fatal("blind drive allowed")
+	}
+	healthy.Store(true)
+	if err := c.Drive(1, "forward"); err != nil {
+		t.Fatal(err)
+	}
+	healthy.Store(false)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for c.Status().Direction != "stop" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c.Status().Direction != "stop" {
+		t.Fatal("video loss did not stop manual drive")
+	}
+	healthy.Store(true)
+	time.Sleep(120 * time.Millisecond)
+	if c.Status().Direction != "stop" {
+		t.Fatal("video recovery resumed motion")
+	}
+	if err := c.Drive(1, "forward"); err == nil {
+		t.Fatal("old input cleared the fault latch")
+	}
+	if err := c.Supervise(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetMode(1, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Drive(1, "forward"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconfigureRejectsConcurrentDriveAndRemainsStopped(t *testing.T) {
+	motor := &fakeMotor{}
+	c := New(motor)
+	defer c.Close()
+	if err := c.Drive(1, "forward"); err != nil {
+		t.Fatal(err)
+	}
+	err := c.Reconfigure(func() error {
+		if err := c.Drive(1, "left"); err != ErrBusy {
+			t.Fatalf("drive during reconfigure: %v", err)
+		}
+		return nil
+	})
+	if err != nil || c.Status().Direction != "stop" || motor.last() != "stop" {
+		t.Fatal("unsafe reconfiguration")
+	}
+}
+
 func TestAutoModeRequiresHealthySignalsAndStopsOnVideoLoss(t *testing.T) {
 	motor := &fakeMotor{}
 	c := New(motor)

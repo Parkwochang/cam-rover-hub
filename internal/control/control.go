@@ -54,6 +54,28 @@ func (c *Coordinator) Close() {
 	c.Stop()
 }
 
+// Reconfigure prevents new motor commands while changing the rover transport.
+// Always stop both the old and new target; reconnecting never resumes motion.
+func (c *Coordinator) Reconfigure(change func() error) error {
+	c.mu.Lock()
+	if c.transitioning {
+		c.mu.Unlock()
+		return ErrBusy
+	}
+	c.transitioning = true
+	c.transitionCancelled = false
+	c.mu.Unlock()
+	c.stop(false)
+	err := change()
+	c.stop(false)
+	c.mu.Lock()
+	c.transitioning = false
+	c.transitionCancelled = false
+	c.fault = "rover link changed; activate manual control before driving"
+	c.mu.Unlock()
+	return err
+}
+
 func validDirection(direction string) bool {
 	switch direction {
 	case "stop", "forward", "backward", "left", "right", "forward-left", "forward-right", "backward-left", "backward-right":
@@ -75,12 +97,20 @@ func (c *Coordinator) Drive(owner uint64, direction string) error {
 		c.mu.Unlock()
 		return ErrBusy
 	}
+	if c.fault != "" {
+		c.mu.Unlock()
+		return errors.New("activate manual control to clear the stop latch")
+	}
+	if c.videoHealthy != nil && !c.videoHealthy() {
+		c.mu.Unlock()
+		return errors.New("video unavailable; rover remains stopped")
+	}
 	c.owner = owner
 	c.direction = direction
 	c.lastInput = time.Now()
 	c.mu.Unlock()
 	if err := c.send(direction); err != nil {
-		c.Stop()
+		c.fail("rover control link lost")
 		return err
 	}
 	return nil
@@ -295,11 +325,15 @@ func (c *Coordinator) watch(ctx context.Context) {
 				c.fail("automatic driving signal lost")
 				continue
 			}
+			if direction != "stop" && videoHealthy != nil && !videoHealthy() {
+				c.fail("video signal lost")
+				continue
+			}
 			if stale {
 				if auto {
 					c.fail("automatic driving command expired")
 				} else {
-					c.Stop()
+					c.fail("operator heartbeat expired")
 				}
 			} else if repeat {
 				if err := c.send(direction); err != nil {

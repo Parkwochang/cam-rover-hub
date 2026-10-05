@@ -35,7 +35,20 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	roverClient := rover.New(cfg.RoverAddr, cfg.RoverToken)
+	settingsCtx, settingsCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	savedAddress, err := store.RoverAddress(settingsCtx, db)
+	settingsCancel()
+	if err != nil {
+		log.Fatal("could not load rover address settings")
+	}
+	if savedAddress != "" {
+		cfg.RoverAddr = savedAddress
+	}
+	address, err := rover.NormalizeAddress(cfg.RoverAddr)
+	if err != nil {
+		log.Fatal("invalid ROVER_ADDR; use a private LAN IP or .local hostname")
+	}
+	roverClient := rover.New(address, cfg.RoverToken)
 	streamCtx, stopStream := context.WithCancel(context.Background())
 	defer stopStream()
 	broker := video.New(roverClient)
@@ -54,6 +67,8 @@ func main() {
 		AP:          network.APConnector{Profile: cfg.APProfile, Interface: cfg.APInterface},
 		Maps:        maps,
 		AutoEnabled: cfg.AutoEnabled,
+		Video:       broker,
+		SettingsDB:  db,
 	}
 
 	router := gin.New()

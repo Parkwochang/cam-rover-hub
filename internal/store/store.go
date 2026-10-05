@@ -21,6 +21,7 @@ func Open(path string) (*sql.DB, error) {
 	for _, statement := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA busy_timeout=5000",
+		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS maps (
 			id INTEGER PRIMARY KEY,
 			name TEXT NOT NULL,

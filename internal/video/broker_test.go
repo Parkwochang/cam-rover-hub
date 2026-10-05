@@ -18,6 +18,41 @@ type pipeSource struct {
 	boundary string
 }
 
+type stalledSource struct{ count atomic.Int32 }
+
+func (s *stalledSource) OpenStream(ctx context.Context) (*http.Response, error) {
+	s.count.Add(1)
+	reader, writer := io.Pipe()
+	go func() { <-ctx.Done(); writer.Close() }()
+	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"multipart/x-mixed-replace; boundary=frame"}}, Body: reader}, nil
+}
+
+func TestStalledStreamRetriesAndCancellationExits(t *testing.T) {
+	source := &stalledSource{}
+	broker := New(source)
+	broker.idleTimeout = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { broker.Run(ctx); close(done) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for source.count.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if source.count.Load() < 2 {
+		cancel()
+		t.Fatal("stalled upstream was not restarted")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stream worker leaked on cancellation")
+	}
+	if broker.Healthy() {
+		t.Fatal("stalled stream reported healthy")
+	}
+}
+
 func (p *pipeSource) OpenStream(ctx context.Context) (*http.Response, error) {
 	p.count.Add(1)
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"multipart/x-mixed-replace; boundary=" + p.boundary}}, Body: p.reader}, nil

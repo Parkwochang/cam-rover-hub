@@ -7,6 +7,7 @@ import (
 )
 
 func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	controller := http.NewResponseController(w)
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=hubframe")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -15,12 +16,21 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for {
 		frame, seq, seen, notify := b.Snapshot()
 		if seq == previous || seen.IsZero() || time.Since(seen) >= 2*time.Second {
+			idle := time.NewTimer(5 * time.Second)
 			select {
 			case <-r.Context().Done():
+				idle.Stop()
 				return
 			case <-notify:
+				idle.Stop()
 				continue
+			case <-idle.C:
+				return
 			}
+		}
+		// Slow viewers may never block the shared capture/stop path indefinitely.
+		if err := controller.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil && err != http.ErrNotSupported {
+			return
 		}
 		if _, err := fmt.Fprintf(w, "--hubframe\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame)); err != nil {
 			return
@@ -31,8 +41,8 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if _, err := w.Write([]byte("\r\n")); err != nil {
 			return
 		}
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
+		if err := controller.Flush(); err != nil && err != http.ErrNotSupported {
+			return
 		}
 		previous = seq
 	}
