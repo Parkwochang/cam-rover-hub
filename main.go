@@ -77,6 +77,11 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 	router.Use(security.RequireIdentity(cfg.RequireTailscale, cfg.AllowedLogin))
+	// UI and WebSocket protocol must upgrade together after deployment.
+	router.Use(func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Next()
+	})
 	hubAPI.Register(router)
 	router.GET("/", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)

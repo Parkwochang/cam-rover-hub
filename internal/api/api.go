@@ -335,6 +335,7 @@ func (a *API) websocket(c *gin.Context) {
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		var message struct {
+			RequestID uint64 `json:"request_id"`
 			Type      string `json:"type"`
 			Direction string `json:"direction"`
 			Speed     int    `json:"speed"`
@@ -347,6 +348,8 @@ func (a *API) websocket(c *gin.Context) {
 		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		var commandErr error
 		switch message.Type {
+		case "activate":
+			commandErr = a.Control.ActivateManual(owner, message.Speed)
 		case "drive":
 			commandErr = a.Control.Drive(owner, message.Direction)
 		case "speed":
@@ -354,7 +357,7 @@ func (a *API) websocket(c *gin.Context) {
 		case "light":
 			commandErr = a.Rover.Light(c.Request.Context(), message.On)
 		case "stop":
-			a.Control.Stop()
+			commandErr = a.Control.Stop()
 		case "supervise":
 			if message.Active {
 				commandErr = a.Control.Supervise(owner)
@@ -365,10 +368,10 @@ func (a *API) websocket(c *gin.Context) {
 			commandErr = errors.New("unknown command")
 		}
 		if commandErr != nil {
-			if err := conn.WriteJSON(gin.H{"type": "error", "message": commandErr.Error()}); err != nil {
+			if err := conn.WriteJSON(gin.H{"type": "error", "command": message.Type, "request_id": message.RequestID, "message": commandErr.Error()}); err != nil {
 				return
 			}
-		} else if err := conn.WriteJSON(gin.H{"type": "ack", "command": message.Type}); err != nil {
+		} else if err := conn.WriteJSON(gin.H{"type": "ack", "command": message.Type, "request_id": message.RequestID, "status": a.Control.Status()}); err != nil {
 			return
 		}
 	}

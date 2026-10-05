@@ -15,15 +15,17 @@ import (
 )
 
 type Client struct {
-	mu      sync.RWMutex
-	base    string
-	token   string
-	http    *http.Client
-	changed chan struct{}
+	mu       sync.RWMutex
+	base     string
+	token    string
+	http     *http.Client
+	changed  chan struct{}
+	resolver *localResolver
 }
 
 func New(address, token string) *Client {
-	c := &Client{token: token, changed: make(chan struct{}), http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: noRedirect, Transport: &http.Transport{DialContext: dialRover, ResponseHeaderTimeout: 2 * time.Second, DisableKeepAlives: true}}}
+	r := &localResolver{}
+	c := &Client{token: token, resolver: r, changed: make(chan struct{}), http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: noRedirect, Transport: &http.Transport{DialContext: r.dial, ResponseHeaderTimeout: 2 * time.Second, DisableKeepAlives: true}}}
 	c.SetAddress(address)
 	return c
 }
@@ -38,6 +40,7 @@ func (c *Client) SetAddress(address string) {
 	c.mu.Lock()
 	next := strings.TrimRight(address, "/")
 	if next != c.base {
+		c.resolver.invalidate()
 		close(c.changed)
 		c.changed = make(chan struct{})
 		c.base = next
@@ -165,7 +168,7 @@ func (c *Client) OpenStream(ctx context.Context) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport := &http.Transport{DialContext: dialRover, ResponseHeaderTimeout: 3 * time.Second, DisableKeepAlives: true}
+	transport := &http.Transport{DialContext: c.resolver.dial, ResponseHeaderTimeout: 3 * time.Second, DisableKeepAlives: true}
 	client := &http.Client{Transport: transport, CheckRedirect: noRedirect}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -16,6 +16,9 @@ var ErrBusy = errors.New("another operator controls the rover")
 var ErrDirection = errors.New("invalid direction")
 var ErrAutoUnavailable = errors.New("automatic driving is not ready")
 
+// Stay below the ESP32's independent 700 ms deadman. Never retry movement.
+const commandTimeout = 500 * time.Millisecond
+
 type Status struct {
 	Mode      string `json:"mode"`
 	Direction string `json:"direction"`
@@ -38,6 +41,7 @@ type Coordinator struct {
 	autoReady           func() bool
 	fault               string
 	transitioning       bool
+	transitionOwner     uint64
 	transitionCancelled bool
 	cancel              context.CancelFunc
 }
@@ -63,6 +67,7 @@ func (c *Coordinator) Reconfigure(change func() error) error {
 		return ErrBusy
 	}
 	c.transitioning = true
+	c.transitionOwner = 0
 	c.transitionCancelled = false
 	c.mu.Unlock()
 	c.stop(false)
@@ -120,31 +125,38 @@ func (c *Coordinator) Speed(owner uint64, speed int) error {
 	if speed < 85 || speed > 255 {
 		return errors.New("speed must be 85-255")
 	}
+	c.sendMu.Lock()
 	c.mu.Lock()
-	allowed := !c.transitioning && c.mode == "manual" && (c.owner == 0 || c.owner == owner)
+	allowed := !c.transitioning && c.fault == "" && c.mode == "manual" && (c.owner == 0 || c.owner == owner)
 	c.mu.Unlock()
 	if !allowed {
+		c.sendMu.Unlock()
 		return ErrBusy
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	return c.motor.Speed(ctx, speed)
+	err := c.motor.Speed(ctx, speed)
+	c.sendMu.Unlock()
+	if err != nil {
+		c.fail("rover control link lost; activate manual control again")
+	}
+	return err
 }
 
 func (c *Coordinator) StopOwner(owner uint64) {
 	c.mu.Lock()
-	owned := c.owner == owner || c.supervisor == owner
+	owned := c.owner == owner || c.supervisor == owner || c.transitionOwner == owner
 	c.mu.Unlock()
 	if owned {
 		c.fail("operator disconnected")
 	}
 }
 
-func (c *Coordinator) Stop() {
-	c.stop(true)
+func (c *Coordinator) Stop() error {
+	return c.stop(true)
 }
 
-func (c *Coordinator) stop(cancelTransition bool) {
+func (c *Coordinator) stop(cancelTransition bool) error {
 	c.mu.Lock()
 	if cancelTransition && c.transitioning {
 		c.transitionCancelled = true
@@ -155,7 +167,7 @@ func (c *Coordinator) stop(cancelTransition bool) {
 	c.direction = "stop"
 	c.lastInput = time.Time{}
 	c.mu.Unlock()
-	_ = c.send("stop")
+	return c.send("stop")
 }
 
 func (c *Coordinator) fail(reason string) {
@@ -175,7 +187,14 @@ func (c *Coordinator) SetGuards(videoHealthy, autoReady func() bool) {
 func (c *Coordinator) Supervise(owner uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.transitioning || (c.owner != 0 && c.owner != owner) {
+	if c.transitioning {
+		if owner != 0 && c.transitionOwner == owner && !c.transitionCancelled {
+			c.lastSupervisor = time.Now()
+			return nil
+		}
+		return ErrBusy
+	}
+	if owner == 0 || (c.owner != 0 && c.owner != owner) {
 		return ErrBusy
 	}
 	c.owner = owner
@@ -190,6 +209,22 @@ func (c *Coordinator) IsOperator(owner uint64) bool {
 }
 
 func (c *Coordinator) SetMode(owner uint64, mode string) error {
+	return c.setMode(owner, mode, 0)
+}
+
+// One WebSocket command confirms stop and speed before clearing the fault latch.
+// Background heartbeats cannot split the activation into independent requests.
+func (c *Coordinator) ActivateManual(owner uint64, speed int) error {
+	if speed < 85 || speed > 255 {
+		return errors.New("speed must be 85-255")
+	}
+	if err := c.Supervise(owner); err != nil {
+		return err
+	}
+	return c.setMode(owner, "manual", speed)
+}
+
+func (c *Coordinator) setMode(owner uint64, mode string, speed int) error {
 	if mode != "manual" && mode != "auto" {
 		return errors.New("mode must be manual or auto")
 	}
@@ -198,37 +233,62 @@ func (c *Coordinator) SetMode(owner uint64, mode string) error {
 	videoHealthy, autoReady := c.videoHealthy, c.autoReady
 	if allowed {
 		c.transitioning = true
+		c.transitionOwner = owner
 		c.transitionCancelled = false
 	}
 	c.mu.Unlock()
 	if !allowed {
 		return ErrBusy
 	}
-	c.stop(false)
-	if mode == "auto" && (videoHealthy == nil || autoReady == nil || !videoHealthy() || !autoReady()) {
+	finished := false
+	defer func() {
+		if finished {
+			return
+		}
 		c.mu.Lock()
 		c.transitioning = false
+		c.transitionOwner = 0
 		c.transitionCancelled = false
 		c.mu.Unlock()
+	}()
+	if err := c.stop(false); err != nil {
+		c.fail("rover stop was not confirmed; activate manual control again")
+		return err
+	}
+	if speed != 0 && videoHealthy != nil && !videoHealthy() {
+		c.fail("video unavailable; activate manual control again")
+		return errors.New("video unavailable; rover remains stopped")
+	}
+	if mode == "auto" && (videoHealthy == nil || autoReady == nil || !videoHealthy() || !autoReady()) {
 		return ErrAutoUnavailable
 	}
 	if mode == "auto" {
-		ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
-		err := c.motor.Speed(ctx, 85)
+		speed = 85
+	}
+	if speed != 0 {
+		c.sendMu.Lock()
+		c.mu.Lock()
+		cancelled := c.transitionCancelled
+		c.mu.Unlock()
+		if cancelled {
+			c.sendMu.Unlock()
+			return ErrBusy
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		err := c.motor.Speed(ctx, speed)
 		cancel()
+		c.sendMu.Unlock()
 		if err != nil {
-			c.mu.Lock()
-			c.transitioning = false
-			c.transitionCancelled = false
-			c.mu.Unlock()
 			c.fail("rover control link lost")
 			return err
 		}
 	}
+	if speed != 0 && videoHealthy != nil && !videoHealthy() {
+		c.fail("video unavailable; activate manual control again")
+		return errors.New("video unavailable; rover remains stopped")
+	}
 	c.mu.Lock()
 	if c.transitionCancelled {
-		c.transitioning = false
-		c.transitionCancelled = false
 		c.mu.Unlock()
 		return ErrBusy
 	}
@@ -240,7 +300,9 @@ func (c *Coordinator) SetMode(owner uint64, mode string) error {
 	c.lastSupervisor = time.Now()
 	c.fault = ""
 	c.transitioning = false
+	c.transitionOwner = 0
 	c.transitionCancelled = false
+	finished = true
 	c.mu.Unlock()
 	return nil
 }
@@ -291,12 +353,12 @@ func (c *Coordinator) send(direction string) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	c.mu.Lock()
-	if direction != "stop" && c.direction != direction {
+	if direction != "stop" && (c.direction != direction || c.fault != "" || c.transitioning || time.Since(c.lastInput) > 550*time.Millisecond) {
 		c.mu.Unlock()
-		return nil
+		return errors.New("movement cancelled or input expired; rover remains stopped")
 	}
 	c.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 	err := c.motor.Move(ctx, direction)
 	c.mu.Lock()
