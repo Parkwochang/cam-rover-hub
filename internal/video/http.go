@@ -13,10 +13,16 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	var previous uint64
+	lastSent := time.Now()
 	for {
 		frame, seq, seen, notify := b.Snapshot()
 		if seq == previous || seen.IsZero() || time.Since(seen) >= 2*time.Second {
-			idle := time.NewTimer(5 * time.Second)
+			// Retry notifications must not reset the no-frame budget indefinitely.
+			remaining := 5*time.Second - time.Since(lastSent)
+			if remaining <= 0 {
+				return
+			}
+			idle := time.NewTimer(remaining)
 			select {
 			case <-r.Context().Done():
 				idle.Stop()
@@ -45,5 +51,6 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		previous = seq
+		lastSent = time.Now()
 	}
 }

@@ -23,10 +23,13 @@ type Client struct {
 }
 
 func New(address, token string) *Client {
-	c := &Client{token: token, changed: make(chan struct{}), http: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DialContext: dialRover, ResponseHeaderTimeout: 2 * time.Second, DisableKeepAlives: true}}}
+	c := &Client{token: token, changed: make(chan struct{}), http: &http.Client{Timeout: 2 * time.Second, CheckRedirect: noRedirect, Transport: &http.Transport{DialContext: dialRover, ResponseHeaderTimeout: 2 * time.Second, DisableKeepAlives: true}}}
 	c.SetAddress(address)
 	return c
 }
+
+// Custom control headers must never be forwarded to a redirected host.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 func (c *Client) SetAddress(address string) {
 	if !strings.Contains(address, "://") {
@@ -163,7 +166,7 @@ func (c *Client) OpenStream(ctx context.Context) (*http.Response, error) {
 		return nil, err
 	}
 	transport := &http.Transport{DialContext: dialRover, ResponseHeaderTimeout: 3 * time.Second, DisableKeepAlives: true}
-	client := &http.Client{Transport: transport}
+	client := &http.Client{Transport: transport, CheckRedirect: noRedirect}
 	resp, err := client.Do(req)
 	if err != nil {
 		transport.CloseIdleConnections()
