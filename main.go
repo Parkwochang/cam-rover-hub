@@ -82,6 +82,8 @@ func main() {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
 	router.GET("/video.mjpeg", gin.WrapH(broker))
+	router.GET("/assets/style.css", func(c *gin.Context) { c.Data(http.StatusOK, "text/css; charset=utf-8", styleCSS) })
+	router.GET("/assets/app.js", func(c *gin.Context) { c.Data(http.StatusOK, "application/javascript; charset=utf-8", appJS) })
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,

@@ -1,5 +1,22 @@
 # cam-rover-hub
 
+## Landscape control deck
+
+The camera fills the viewport, with a hold-to-drive pad at bottom left and a
+relative-path minimap at bottom right. The top-right settings button opens
+connection, minimap and drive/display tabs. Settings include a persisted private
+LAN IP or `.local` rover address, stopped-state reconnect, Wi-Fi recovery,
+minimap visibility/size/opacity/follow mode and camera fit. Map/display preferences
+stay in the browser; rover addresses persist in the hub. Credentials are never
+stored in browser preferences. A fullscreen button requests landscape when the
+browser supports it; portrait layout remains usable.
+
+Offline video disables driving but not settings or Stop. Activate manual control
+explicitly before driving; pointer release/cancel, focus loss and hidden tabs
+stop motion. Recovery never replays a held command. The default displayed speed
+85 is sent when manual control is activated. Automatic driving remains subject
+to `AUTO_ENABLED` and hardware acceptance; a minimap is not an obstacle map.
+
 Raspberry Pi hub for the ESP32-CAM rover. The Gin server provides one mobile entry point for manual driving, rover Wi-Fi provisioning, and status. The service binds to loopback so it can be published privately with Tailscale Serve.
 
 See [Pi deployment and hardware acceptance](docs/deployment.md) before exposing or moving the rover. Production requires a specific Tailscale identity and the service refuses non-loopback binds. Automatic movement is off until physical tests pass.

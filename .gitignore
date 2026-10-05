@@ -8,3 +8,6 @@ data/
 /vision/__pycache__/
 /config/
 *.msg
+/output/playwright/
+/.playwright-cli/
+/preview/
