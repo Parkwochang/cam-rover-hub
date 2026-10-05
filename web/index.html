@@ -1,222 +1,260 @@
 <!doctype html>
 <html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cam Rover Hub</title>
-  <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
-    body { margin: 0; background: #101722; color: #f4f7fb; }
-    main { max-width: 920px; margin: auto; padding: 20px; }
-    section { background: #1b2737; border-radius: 16px; padding: 18px; margin: 16px 0; }
-    button, input, select { font: inherit; }
-    button { padding: 10px 14px; border: 0; border-radius: 9px; background: #3972c3; color: white; }
-    button:disabled { opacity: .45; }
-    .pad { display: grid; grid-template-columns: repeat(3, 65px); gap: 8px; width: max-content; margin: 15px auto; touch-action: none; }
-    .pad button { height: 58px; font-size: 1.4rem; touch-action: none; }
-    .stop { background: #a33d49; }
-    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
-    input:not([type=range]), select { padding: 9px; min-width: 180px; max-width: 100%; }
-    #video { width: 100%; min-height: 220px; background: #080b10; object-fit: contain; }
-    #map { width: 100%; height: 260px; background: #0e1520; }
-  </style>
-</head>
-<body>
-<main>
-  <h1>Cam Rover Hub</h1>
-  <section><h2>영상</h2><img id="video" src="/video.mjpeg" alt="로버 영상"></section>
-  <section>
-    <h2>주행</h2><p id="status">연결 중입니다.</p>
-    <div class="row"><button id="manualMode">수동 모드</button><button id="autoMode">자동 탐색</button><span id="modeState">수동 모드</span></div>
-    <div class="pad" aria-label="주행 버튼">
-      <button data-direction="forward-left">↖</button><button data-direction="forward">↑</button><button data-direction="forward-right">↗</button>
-      <button data-direction="left">←</button><button class="stop" data-direction="stop">■</button><button data-direction="right">→</button>
-      <button data-direction="backward-left">↙</button><button data-direction="backward">↓</button><button data-direction="backward-right">↘</button>
-    </div>
-    <div class="row"><label>속도 <input id="speed" type="range" min="85" max="255" value="170"></label><output id="speedValue">170</output><button id="light">라이트 켜기</button></div>
-    <small>버튼을 누르는 동안만 움직입니다. 연결이 끊기면 자동으로 멈춥니다.</small>
-  </section>
-  <section>
-    <h2>집 Wi-Fi</h2><p id="networkStatus">로버 상태를 확인 중입니다.</p>
-    <div class="row"><button id="connectAP">로버 AP 연결</button><button id="scanWiFi">주변 Wi-Fi 검색</button></div>
-    <div class="row"><select id="networkList"><option value="">검색 결과</option></select><input id="ssid" placeholder="2.4 GHz Wi-Fi 이름" autocomplete="off"><input id="password" type="password" placeholder="Wi-Fi 암호" autocomplete="off"></div>
-    <div class="row"><button id="useHome">집 Wi-Fi 접속·저장</button><button id="useAP">AP 모드로 전환</button></div>
-    <p id="networkMessage" role="status"></p>
-  </section>
-  <section>
-    <h2>상대 경로 미니맵</h2>
-    <p>단안 카메라 추정 경로입니다. 축척·실제 거리·장애물 위치를 보장하지 않습니다.</p>
-    <div class="row"><input id="mapName" placeholder="지도 이름" maxlength="80"><button id="createMap">새 지도 기록</button><button id="saveMap">지도 저장</button></div>
-    <div class="row"><select id="mapList"><option value="">저장된 지도 선택</option></select><button id="loadMap">지도 불러오기</button></div>
-    <p id="mapStatus" role="status">지도 작업 없음</p>
-    <canvas id="map" aria-label="추정 경로와 현재 위치"></canvas>
-  </section>
-</main>
-<script>
-  const status = document.getElementById('status');
-  const networkStatus = document.getElementById('networkStatus');
-  const networkMessage = document.getElementById('networkMessage');
-  let socket;
-  let operatorID = 0;
-  let activeDirection = 'stop';
-  let reconnectDelay = 500;
-  const send = (message) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); };
-  const stop = () => { activeDirection = 'stop'; send({type:'stop'}); };
-  function connectSocket() {
-    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    socket = new WebSocket(`${scheme}//${location.host}/ws`);
-    socket.onopen = () => { reconnectDelay = 500; status.textContent = '조작 연결됨'; };
-    socket.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'hello') { operatorID = msg.operator_id; send({type:'supervise', active:true}); }
-      if (msg.type === 'error') status.textContent = msg.message;
-    };
-    socket.onclose = () => { operatorID = 0; activeDirection = 'stop'; status.textContent = '연결 끊김 · 로버 정지'; setTimeout(connectSocket, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 5000); };
-  }
-  connectSocket();
-  document.querySelectorAll('[data-direction]').forEach((button) => {
-    const direction = button.dataset.direction;
-    button.addEventListener('pointerdown', (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); activeDirection = direction; send({type:'drive', direction}); });
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(name, stop);
-  });
-  setInterval(() => { if (activeDirection !== 'stop') send({type:'drive', direction:activeDirection}); }, 250);
-  setInterval(() => { if (!document.hidden && document.hasFocus() && operatorID) send({type:'supervise', active:true}); }, 250);
-  addEventListener('blur', () => { stop(); send({type:'supervise', active:false}); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); send({type:'supervise', active:false}); } });
-  const speed = document.getElementById('speed');
-  speed.addEventListener('input', () => { document.getElementById('speedValue').value = speed.value; });
-  speed.addEventListener('change', () => send({type:'speed', speed:Number(speed.value)}));
-  let lightOn = false;
-  document.getElementById('light').addEventListener('click', () => { lightOn = !lightOn; send({type:'light', on:lightOn}); document.getElementById('light').textContent = lightOn ? '라이트 끄기' : '라이트 켜기'; });
-
-  async function jsonRequest(path, options) {
-    const response = await fetch(path, {...options, headers:{'Content-Type':'application/json', ...(options?.headers || {})}});
-    if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `HTTP ${response.status}`); }
-    return response.json();
-  }
-  async function changeMode(mode) {
-    activeDirection = 'stop';
-    try {
-      const state = await jsonRequest('/api/mode', {method:'POST', body:JSON.stringify({mode, operator_id:operatorID})});
-      document.getElementById('modeState').textContent = state.mode === 'auto' ? '자동 탐색 중' : '수동 모드';
-      status.textContent = state.message || state.fault || '모드가 전환됐습니다.';
-      refreshMaps();
-    } catch (error) { status.textContent = error.message; }
-  }
-  document.getElementById('manualMode').addEventListener('click', () => changeMode('manual'));
-  document.getElementById('autoMode').addEventListener('click', () => changeMode('auto'));
-  async function refreshStatus() {
-    try {
-      const state = await jsonRequest('/api/status');
-      document.getElementById('modeState').textContent = state.mode === 'auto' ? '자동 탐색 중' : '수동 모드';
-      if (state.fault) status.textContent = state.fault;
-    } catch (_) {}
-  }
-  setInterval(refreshStatus, 1000);
-  async function refreshNetwork() {
-    try {
-      const data = await jsonRequest('/api/network');
-      networkStatus.textContent = `현재 ${data.mode === 'sta' ? '집 Wi-Fi' : '로버 AP'} · ${data.phase || '대기'} · ${data.ip || ''} · 저장된 SSID: ${data.saved_ssid || '없음'}`;
-      if (data.last_error) networkMessage.textContent = data.last_error;
-    } catch (error) { networkStatus.textContent = `로버에 연결할 수 없습니다: ${error.message}`; }
-  }
-  document.getElementById('connectAP').addEventListener('click', async () => {
-    stop();
-    try { await jsonRequest('/api/link/ap', {method:'POST'}); networkMessage.textContent = '로버 AP에 연결했습니다.'; refreshNetwork(); }
-    catch (error) { networkMessage.textContent = error.message; }
-  });
-  document.getElementById('scanWiFi').addEventListener('click', async () => {
-    stop();
-    try { await jsonRequest('/api/wifi/scan', {method:'POST'}); networkMessage.textContent = 'Wi-Fi 검색 중입니다.'; }
-    catch (error) { networkMessage.textContent = error.message; }
-  });
-  async function refreshScan() {
-    try {
-      const result = await jsonRequest('/api/wifi/scan');
-      if (result.phase !== 'ready') return;
-      const list = document.getElementById('networkList');
-      list.replaceChildren(new Option('검색 결과', ''));
-      for (const item of result.networks || []) list.add(new Option(`${item.ssid} (${item.rssi} dBm)`, item.ssid));
-    } catch (_) {}
-  }
-  document.getElementById('networkList').addEventListener('change', (event) => { if (event.target.value) document.getElementById('ssid').value = event.target.value; });
-  async function changeNetwork(mode) {
-    stop();
-    const ssid = document.getElementById('ssid').value;
-    const password = document.getElementById('password').value;
-    try {
-      await jsonRequest('/api/network', {method:'POST', body:JSON.stringify({mode, ...(mode === 'sta' && ssid && password ? {ssid, password} : {})})});
-      document.getElementById('password').value = '';
-      networkMessage.textContent = '전환을 시작했습니다. 연결 상태를 확인하세요.';
-    } catch (error) { networkMessage.textContent = error.message; }
-  }
-  document.getElementById('useHome').addEventListener('click', () => changeNetwork('sta'));
-  document.getElementById('useAP').addEventListener('click', () => changeNetwork('ap'));
-  refreshNetwork();
-  setInterval(refreshNetwork, 2000);
-  setInterval(refreshScan, 1500);
-
-  const mapCanvas = document.getElementById('map');
-  const mapStatus = document.getElementById('mapStatus');
-  let shownMapID = 0;
-  function drawMap(poses, tracking) {
-    const ratio = devicePixelRatio || 1;
-    const width = mapCanvas.clientWidth;
-    const height = mapCanvas.clientHeight;
-    mapCanvas.width = Math.round(width * ratio);
-    mapCanvas.height = Math.round(height * ratio);
-    const ctx = mapCanvas.getContext('2d');
-    ctx.scale(ratio, ratio);
-    ctx.fillStyle = '#0e1520'; ctx.fillRect(0, 0, width, height);
-    if (!poses.length) { ctx.fillStyle = '#aebdd0'; ctx.fillText('추정 위치가 아직 없습니다', 16, 28); return; }
-    const xs = poses.map(p => p.x), ys = poses.map(p => p.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    const span = Math.max(maxX - minX, maxY - minY, 0.01);
-    const scale = Math.min((width - 40) / span, (height - 40) / span);
-    const point = p => ({x:width / 2 + (p.x - (minX + maxX) / 2) * scale, y:height / 2 - (p.y - (minY + maxY) / 2) * scale});
-    ctx.beginPath();
-    poses.forEach((pose, i) => { const p = point(pose); if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); });
-    ctx.strokeStyle = '#6cc8ed'; ctx.lineWidth = 2; ctx.stroke();
-    const latest = poses[poses.length - 1], tip = point(latest);
-    ctx.save(); ctx.translate(tip.x, tip.y); ctx.rotate(-latest.heading);
-    ctx.fillStyle = tracking ? '#65df9b' : '#ff9a66';
-    ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(-7, 7); ctx.lineTo(7, 7); ctx.closePath(); ctx.fill(); ctx.restore();
-  }
-  async function refreshMaps() {
-    try {
-      const [list, state] = await Promise.all([jsonRequest('/api/maps'), jsonRequest('/api/maps/status')]);
-      const select = document.getElementById('mapList');
-      const selected = select.value;
-      select.replaceChildren(new Option('저장된 지도 선택', ''));
-      for (const item of list.maps) select.add(new Option(`${item.name} · ${item.status}`, String(item.id)));
-      select.value = selected || (state.map_id ? String(state.map_id) : '');
-      const mapID = state.map_id || Number(select.value);
-      mapStatus.textContent = state.error || (state.running ? `지도 #${mapID} · ${state.tracking ? '위치 추적 중' : '위치 추적 대기/실패 · 정지 필요'} · 시각 위험 ${state.risk_fresh ? (state.risk_safe ? '낮음(보장 아님)' : '높음/불확실') : '평가 대기'}` : '지도 작업 없음');
-      if (mapID) {
-        const data = await jsonRequest(`/api/maps/${mapID}/poses`);
-        shownMapID = mapID;
-        drawMap(data.poses, state.running && state.tracking);
-      } else if (shownMapID) { shownMapID = 0; drawMap([], false); }
-    } catch (error) { mapStatus.textContent = error.message; }
-  }
-  document.getElementById('createMap').addEventListener('click', async () => {
-    stop();
-    try { await jsonRequest('/api/maps', {method:'POST', body:JSON.stringify({name:document.getElementById('mapName').value, operator_id:operatorID})}); refreshMaps(); }
-    catch (error) { mapStatus.textContent = error.message; }
-  });
-  document.getElementById('saveMap').addEventListener('click', async () => {
-    stop();
-    try { await jsonRequest('/api/maps/save', {method:'POST', body:JSON.stringify({operator_id:operatorID})}); refreshMaps(); }
-    catch (error) { mapStatus.textContent = error.message; }
-  });
-  document.getElementById('loadMap').addEventListener('click', async () => {
-    stop();
-    const id = document.getElementById('mapList').value;
-    if (!id) return;
-    try { await jsonRequest(`/api/maps/${id}/load`, {method:'POST', body:JSON.stringify({operator_id:operatorID})}); refreshMaps(); }
-    catch (error) { mapStatus.textContent = error.message; }
-  });
-  refreshMaps(); setInterval(refreshMaps, 2000);
-</script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#080d13" />
+    <title>Rover · Control Deck</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <main id="cockpit" aria-label="로버 원격 제어">
+      <img id="video" alt="로봇 실시간 카메라" draggable="false" />
+      <div class="camera-shade" aria-hidden="true"></div>
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">R</span>
+          <div>ROVER<span class="brand-caption">CONTROL DECK</span></div>
+        </div>
+        <div class="connection glass" role="status">
+          <span id="linkDot" class="dot"></span
+          ><span id="status">허브 연결 중</span
+          ><span id="modeState" class="mode-badge">MANUAL</span>
+        </div>
+        <div class="top-actions">
+          <button
+            id="fullscreen"
+            class="icon-button glass"
+            aria-label="전체 화면"
+            title="전체 화면"
+          >
+            ⛶
+          </button>
+          <button
+            id="openSettings"
+            class="icon-button glass"
+            aria-label="설정 열기"
+            title="설정"
+          >
+            ⚙
+          </button>
+        </div>
+      </header>
+      <div id="videoNotice" class="video-notice glass" role="status">
+        <span class="camera-symbol" aria-hidden="true">◉</span>
+        <h1>카메라 연결 대기</h1>
+        <p id="videoMessage">
+          로봇이 꺼져 있어도 주소와 화면 설정은 변경할 수 있습니다.
+        </p>
+        <button id="retryVideo" class="secondary">연결 다시 시도</button>
+      </div>
+      <div class="reticle" aria-hidden="true"></div>
+      <aside class="drive-overlay glass" aria-label="주행 조작">
+        <div class="overlay-heading">
+          <span>DRIVE</span
+          ><button id="manualMode" class="chip">수동 제어 활성화</button>
+        </div>
+        <div class="pad" aria-label="누르는 동안만 주행">
+          <button data-direction="forward-left" aria-label="좌측 전진">
+            ↖</button
+          ><button data-direction="forward" aria-label="전진">↑</button
+          ><button data-direction="forward-right" aria-label="우측 전진">
+            ↗
+          </button>
+          <button data-direction="left" aria-label="좌회전">←</button
+          ><button
+            id="emergencyStop"
+            data-direction="stop"
+            class="stop"
+            aria-label="정지"
+          >
+            ■</button
+          ><button data-direction="right" aria-label="우회전">→</button>
+          <button data-direction="backward-left" aria-label="좌측 후진">
+            ↙</button
+          ><button data-direction="backward" aria-label="후진">↓</button
+          ><button data-direction="backward-right" aria-label="우측 후진">
+            ↘
+          </button>
+        </div>
+        <div class="drive-footer">
+          <span id="speedReadout">SPD 85</span><span>HOLD TO DRIVE</span>
+        </div>
+      </aside>
+      <aside
+        id="minimap"
+        class="map-overlay glass"
+        aria-label="상대 경로 미니맵"
+      >
+        <div class="overlay-heading">
+          <span>RELATIVE MAP</span
+          ><button id="mapSettings" class="chip" aria-label="미니맵 설정 열기">
+            ↗
+          </button>
+        </div>
+        <canvas id="map" aria-label="추정 경로와 현재 위치"></canvas>
+        <div id="mapStatus" class="map-caption" role="status">
+          위치 추적 대기
+        </div>
+        <span class="map-disclaimer"
+          >추정 경로 · 실제 거리/장애물 지도 아님</span
+        >
+      </aside>
+      <p class="orientation-hint">가로로 돌리면 더 넓게 볼 수 있어요</p>
+      <p id="toast" class="toast glass" role="status" hidden></p>
+    </main>
+    <dialog id="settingsDialog" aria-labelledby="settingsTitle">
+      <div class="settings-header">
+        <div>
+          <span class="eyebrow">CONTROL DECK</span>
+          <h2 id="settingsTitle">설정</h2>
+        </div>
+        <button id="closeSettings" class="icon-button" aria-label="설정 닫기">
+          ✕
+        </button>
+      </div>
+      <nav class="tabs" aria-label="설정 분류">
+        <button data-tab="connection" aria-selected="true">연결</button
+        ><button data-tab="map" aria-selected="false">미니맵</button
+        ><button data-tab="drive" aria-selected="false">주행·화면</button>
+      </nav>
+      <div class="settings-content">
+        <section data-panel="connection">
+          <h3>로봇 주소</h3>
+          <p class="muted">
+            재부팅 시 IP가 바뀌면 <code>cam-rover.local</code> 또는 공유기의
+            DHCP 예약을 사용하세요.
+          </p>
+          <form id="addressForm">
+            <label for="roverAddress">IP / 호스트명</label>
+            <div class="form-row">
+              <input
+                id="roverAddress"
+                placeholder="cam-rover.local"
+                maxlength="253"
+                autocomplete="off"
+                spellcheck="false"
+                required
+              /><button id="saveAddress" type="submit">저장</button>
+            </div>
+          </form>
+          <p id="addressMessage" class="muted" role="status">
+            저장하면 정지하며, 로봇이 꺼져 있어도 저장됩니다.
+          </p>
+          <button id="reconnect" class="secondary">영상·연결 다시 시도</button>
+          <hr />
+          <h3>로봇 Wi-Fi</h3>
+          <p id="networkStatus" class="muted">로봇 연결 상태 확인 중</p>
+          <div class="form-row">
+            <button id="scanWiFi" class="secondary">2.4 GHz Wi-Fi 검색</button
+            ><button id="connectAP" class="secondary">
+              파이를 로봇 AP에 연결
+            </button>
+          </div>
+          <p class="warning">
+            파이가 Wi-Fi만 사용 중이면 AP 전환 시 허브/Tailscale 연결이
+            끊깁니다. 별도 유선 연결이 있을 때만 사용하세요.
+          </p>
+          <label for="networkList">검색 결과</label
+          ><select id="networkList">
+            <option value="">검색 결과 선택</option>
+          </select>
+          <label for="ssid">집 Wi-Fi 이름</label
+          ><input
+            id="ssid"
+            placeholder="2.4 GHz SSID"
+            autocomplete="off"
+            maxlength="32"
+          />
+          <label for="password">Wi-Fi 암호</label
+          ><input
+            id="password"
+            type="password"
+            autocomplete="new-password"
+            maxlength="63"
+          />
+          <div class="form-row">
+            <button id="useHome">접속·저장</button
+            ><button id="useAP" class="secondary">로봇 AP 모드</button>
+          </div>
+          <p id="networkMessage" class="muted" role="status"></p>
+        </section>
+        <section data-panel="map" hidden>
+          <h3>미니맵 표시</h3>
+          <label class="toggle"
+            ><input id="showMap" type="checkbox" checked /> 미니맵 표시</label
+          >
+          <label for="mapSize"
+            >크기 <output id="mapSizeValue">240</output> px</label
+          ><input id="mapSize" type="range" min="170" max="320" value="240" />
+          <label for="mapOpacity"
+            >배경 불투명도 <output id="mapOpacityValue">80</output>%</label
+          ><input id="mapOpacity" type="range" min="40" max="100" value="80" />
+          <label class="toggle"
+            ><input id="followMap" type="checkbox" /> 현재 위치 중심으로
+            보기</label
+          >
+          <p class="warning">
+            단안 카메라의 축척 없는 상대 경로입니다. 실제 거리나 장애물 위치를
+            보장하지 않습니다.
+          </p>
+          <hr />
+          <h3>지도 기록</h3>
+          <label for="mapName">지도 이름</label
+          ><input id="mapName" maxlength="80" placeholder="새 지도 이름" />
+          <div class="form-row">
+            <button id="createMap">기록 시작</button
+            ><button id="saveMap" class="secondary">정지·저장</button>
+          </div>
+          <label for="mapList">저장된 지도</label>
+          <div class="form-row">
+            <select id="mapList">
+              <option value="">지도 선택</option></select
+            ><button id="loadMap" class="secondary">불러오기</button>
+          </div>
+          <p id="mapDetail" class="muted" role="status">지도 작업 없음</p>
+        </section>
+        <section data-panel="drive" hidden>
+          <h3>수동 주행</h3>
+          <p class="muted">
+            버튼을 누르는 동안만 움직입니다. 영상/통신 손실 시 정지하며 복구 후
+            직접 재활성화해야 합니다.
+          </p>
+          <label for="speed"
+            >속도 <output id="speedValue">85</output> / 255</label
+          ><input
+            id="speed"
+            type="range"
+            min="85"
+            max="255"
+            value="85"
+          /><button id="light" class="secondary">라이트 켜기</button>
+          <hr />
+          <h3>카메라 화면</h3>
+          <label for="videoFit">화면 맞춤</label
+          ><select id="videoFit">
+            <option value="cover">화면 채우기 (일부 잘림)</option>
+            <option value="contain">전체 영상 보기 (여백)</option>
+          </select>
+          <p class="muted">
+            미니맵·화면 설정은 이 브라우저에만 저장됩니다. 주소는 허브에
+            저장됩니다.
+          </p>
+          <hr />
+          <h3>자동 탐색</h3>
+          <button id="autoMode" disabled>자동 탐색 비활성화</button>
+          <p class="warning">
+            실기 안전 검증 전 자동 주행은 사용할 수 없습니다.
+          </p>
+        </section>
+      </div>
+      <footer class="settings-footer">
+        <span class="dot"></span> 설정 중에는 조작키가 비활성화됩니다.
+      </footer>
+    </dialog>
+  </body>
 </html>

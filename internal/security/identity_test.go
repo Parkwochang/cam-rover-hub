@@ -52,3 +52,29 @@ func TestIdentityMiddleware(t *testing.T) {
 		t.Fatalf("local health status=%d", local.Code)
 	}
 }
+
+func TestSettingsAndAssetsRequireIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(RequireIdentity(true, "owner@example.com"))
+	for _, path := range []string{"/assets/style.css", "/assets/app.js", "/api/link", "/api/link/reconnect"} {
+		router.Any(path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	}
+	for _, path := range []string{"/assets/style.css", "/assets/app.js", "/api/link", "/api/link/reconnect"} {
+		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPost} {
+			for _, login := range []string{"", "stranger@example.com", "owner@example.com"} {
+				request := httptest.NewRequest(method, path, nil)
+				request.Header.Set("Tailscale-User-Login", login)
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				want := http.StatusForbidden
+				if login == "owner@example.com" {
+					want = http.StatusNoContent
+				}
+				if response.Code != want {
+					t.Fatalf("%s %s login=%q got=%d", method, path, login, response.Code)
+				}
+			}
+		}
+	}
+}
