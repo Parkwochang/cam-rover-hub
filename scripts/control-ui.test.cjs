@@ -8,7 +8,7 @@ function cockpit() {
   const elements = new Map(), events = new Map(), sent = [];
   const node = (id) => {
     if (!elements.has(id)) elements.set(id, {
-      value: id === "speed" ? "85" : "", dataset: {}, open: false, hidden: false,
+      value: id === "speed" ? "170" : "", dataset: {}, open: false, hidden: false,
       classList: { add() {}, remove() {}, toggle() {} }, handlers: {},
       addEventListener(name, fn) { this.handlers[name] = fn; },
       setAttribute() {}, removeAttribute() {}, setPointerCapture() {},
@@ -48,6 +48,7 @@ test("only matching activation ACK enables controls",async()=>{
   const done=c.node("manualMode").handlers.click();
   const request=c.sent.at(-1);
   assert.equal(request.type,"activate");
+  assert.equal(request.speed,170,"manual activation must use the default speed");
   assert.equal(c.run("canDrive()"),false);
   c.receive({type:"ack",command:"activate",request_id:request.request_id+1,status:{mode:"manual"}});
   await Promise.resolve();
@@ -56,6 +57,15 @@ test("only matching activation ACK enables controls",async()=>{
   await done;
   assert.equal(c.run("canDrive()"),true);
   assert.equal(c.sent.filter(x=>x.type==="stop").length,0,"activation must not send duplicate stops");
+});
+
+test("manual speed markup defaults to 170 without raising the minimum",()=>{
+  const html=fs.readFileSync(path.join(__dirname,"../web/index.html"),"utf8");
+  const input=html.match(/<input\b[^>]*\bid="speed"[^>]*>/)[0];
+  assert.match(input,/\bvalue="170"/);
+  assert.match(input,/\bmin="85"/);
+  assert.match(html,/<span id="speedReadout">SPD 170<\/span>/);
+  assert.match(html,/<output id="speedValue">170<\/output>/);
 });
 
 test("blur during activation cannot be undone by late ACK",async()=>{
